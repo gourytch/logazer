@@ -14,7 +14,6 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    if: github.event_name == 'push' || github.event.pull_request.draft != 'true'
 
     steps:
       - name: Checkout
@@ -34,8 +33,9 @@ jobs:
           echo "ASSET=logazer-windows-x64.zip" >> $env:GITHUB_ENV
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ASSET }}
+          files: ${{ env.ASET }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
