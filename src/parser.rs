@@ -1,5 +1,6 @@
-use image::{DynamicImage, RgbaImage};
+use image::{DynamicImage};
 use crate::types::{Meta, Quality};
+
 
 pub fn parse(image: &DynamicImage) -> Meta {
     
@@ -40,10 +41,16 @@ const DRIFT_VALUE: u32 = 10;
 const DARK_THRESHOLD3: u32 = 3 * DARK_VALUE; 
 const DRIFT_THRESHOLD3: u32 = 3 * DRIFT_VALUE; 
 
-const COLOR_DARK: Color32 = Color32::from_rgb(DARK_VALUE as u8, DARK_VALUE as u8, DARK_VALUE as u8);
+// const COLOR_DARK: Color32 = Color32::from_rgb(DARK_VALUE as u8, DARK_VALUE as u8, DARK_VALUE as u8);
 
 const ERR_RATE_PERCENT_THRESHOLD: u32 = 10;
 
+
+//////////////////////////////////////////////////////////////////////////////
+/// ScreenCoords
+//////////////////////////////////////////////////////////////////////////////
+
+#[derive(Clone, Copy)]
 struct ScreenCoords {
     pub screen_width: u32,
     pub screen_height: u32,
@@ -58,26 +65,67 @@ struct ScreenCoords {
     pub rhombus_size: u32,
 }
 
-const SD_2560_1440: ScreenCoords = ScreenCoords {
+const SD_BASE: ScreenCoords = ScreenCoords {
     screen_width: 2560,
     screen_height: 1440,
-    title_top: 40, // from the top to the white line on the title (~approx)
-    title_bottom: 152, // from the top to the line below that is definitely not a title
-    title_width: 600, // maximum width for the title
-    coords_top: 53,   // from the top to the coords block
-    coords_bottom: 74,  // from the top the bottom line of the coords block
-    coords_right: 2280, // right boundary of the coords block
-    coords_left: 1840,  // left boundary of the coords block
-    rhombus_cy: 69,     // y-coord of quality rhombus
-    rhombus_size: 25, // diagonal size for the quality rhombus (+-2 px)
+    title_top: 40, // (Ycoord) from the top to the white line on the title (~approx)
+    title_bottom: 152, // (Ycoord) from the top to the line below that is definitely not a title
+    title_width: 600, // (Xcoord) maximum width for the title
+    coords_top: 53,   // (Ycoord) from the top to the coords block
+    coords_bottom: 74,  // (Ycoord) from the top the bottom line of the coords block
+    coords_right: 2280, // (Xcoord) right boundary of the coords block
+    coords_left: 1840,  // (Xcoord) left boundary of the coords block
+    rhombus_cy: 69,     // (Ycoord) y-coord of quality rhombus
+    rhombus_size: 25, // (Xcoord) diagonal size for the quality rhombus (+-2 px)
 };
 
+fn get_scaled_screen_coords(width: u32, height: u32) -> ScreenCoords {
+    macro_rules! scaled_w {
+        ($field:ident) => {
+            SD_BASE.$field * width / SD_BASE.screen_width
+        };
+    }
+    macro_rules! scaled_h {
+        ($field:ident) => {
+            SD_BASE.$field * height / SD_BASE.screen_height
+        };
+    }
+
+    ScreenCoords {
+        screen_width: width,
+        screen_height: height,
+        title_top: scaled_h!(title_top),
+        title_bottom: scaled_h!(title_bottom),
+        title_width: scaled_w!(title_width),
+        coords_top: scaled_h!(coords_top),
+        coords_bottom: scaled_h!(coords_bottom),
+        coords_right: scaled_w!(coords_right),
+        coords_left: scaled_w!(coords_left),
+        rhombus_cy: scaled_h!(rhombus_cy),
+        rhombus_size: scaled_w!(rhombus_size),
+     }
+}
+
+
+fn get_screen_coords(image: &DynamicImage) -> ScreenCoords {
+    let (width, height) = image.dimensions();    
+    if width == SD_BASE.screen_width && height == SD_BASE.screen_height {
+        SD_BASE
+    } else {
+        get_scaled_screen_coords(width, height)
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// LineMatch
+//////////////////////////////////////////////////////////////////////////////
 
 struct LineMatch {
     pub cx: u32,
     pub cy: u32,
     pub rgba: Rgba<u8>,
     pub quality: Quality,
+    #[allow(unused)] 
     pub diff: u32,
 }
 
@@ -175,8 +223,6 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch) -> boo
     let x1 = lm.cx + d32;
     let y0 = lm.cy - d32;
     let y1 = lm.cy + d32;
-    let w = x1 - x0;
-    let h = y1 - y0;
     let mut counter = 0;
 
     // eprintln!("check range x=({};{}) {}x{} ...", x0, x0, w, h);
@@ -261,7 +307,7 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords) -> Option<LineMatc
                     if d < DRIFT_THRESHOLD3 { // solid enough
                         let (quality, diff) = best_quality_match(cm);
                         let (adj_x, adj_y) = adjust_center(image, sd, cx, y);
-                        // eprintln!("... solid enough, return ({};{}),q={}, diff={}", adj_x, adj_y, quality.to_str(), diff);
+                        eprintln!("... line seems solid enough ({};{}),q={}, diff={}", adj_x, adj_y, quality.to_str(), diff);
                         let lm = LineMatch{
                             cx: adj_x,
                             cy: adj_y,
@@ -295,13 +341,8 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords) -> Option<LineMatc
 }
 
 
-fn the_best_screen_coords(_image: &DynamicImage) -> ScreenCoords {
-    SD_2560_1440 // TODO add more screen definitions later
-}
-
-
 fn parse_rhombus_quality(image: &DynamicImage) -> Quality {
-    let sd = the_best_screen_coords(image);
+    let sd = get_screen_coords(image);
     if let Some(lm) = find_rhombus_line(image, &sd) {
         return lm.quality;
     }
@@ -316,7 +357,7 @@ fn parse_rhombus_quality(image: &DynamicImage) -> Quality {
 mod tests {
     use image::DynamicImage;
     use crate::types::Quality;
-    use crate::parser::{parse, parse_rhombus_quality};
+    use crate::parser::{parse_rhombus_quality};
     
     fn load_test_png(name: &'static str) -> DynamicImage {
         image::open(format!("./assets/test/{}.png", name)).expect("load error")

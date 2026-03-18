@@ -130,7 +130,8 @@ impl Watcher {
             thread_handle: None,
         }
     }
-
+    
+    #[allow(unused)] 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }
@@ -143,6 +144,7 @@ impl Watcher {
         self.capturing_started.load(Ordering::Relaxed)
     }
 
+    #[allow(unused)]
     pub fn stop(&mut self) {
         if !self.is_running() {
             return;
