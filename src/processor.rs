@@ -1,8 +1,6 @@
-use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::{bounded, Sender, Receiver, TrySendError};
-use image::DynamicImage;
 
 use crate::types::{Meta, Screenshot};
 use crate::parser::parse;

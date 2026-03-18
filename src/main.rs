@@ -1,19 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{fs, thread};
-use std::time::{Duration, Instant};
-use epaint::{Rect, Rounding, Vec2};
-use image::{DynamicImage, GenericImageView};
+use std::time::{Duration};
 use serde::{Serialize, Deserialize};
 
-use std::sync::mpsc::{Receiver, SyncSender};
 use crossbeam_channel::TryRecvError;
 
 use eframe::egui::{
-    self, Align, Button, Color32, ColorImage, Image, Layout, RichText, ScrollArea, TextureHandle, TextureOptions, TopBottomPanel, Visuals
+    self, Align, Button, Color32, ColorImage, Image, Layout, RichText, TextureHandle, TextureOptions, TopBottomPanel, Visuals
 };
 use egui_twemoji::EmojiLabel;
 
@@ -29,6 +25,8 @@ mod parser;
 use crate::types::{Quality, Screenshot};
 use crate::grabber::Watcher;
 use crate::processor::new_processor_pipeline;
+
+const USE_TRY_RECV: bool = false;
 
 const COFFEE_BREAK_FOR_NOISE: u64 = 10;
 const COFFEE_BREAK_BETWEEN_REPAINTS: u64 = 100;
@@ -61,6 +59,12 @@ const COLOR_SLEEPING: Color32 = Color32::from_rgb(128,128,255);
 const COLOR_WATCHING: Color32 = Color32::from_rgb(255,255,128);
 
 const SCREENSHOT_PATH: &'static str = "./screenshots/";
+
+
+//////////////////////////////////////////////////////////////////////////////
+/// main
+//////////////////////////////////////////////////////////////////////////////
+
 fn main() -> eframe::Result {
     env_logger::init();
     
@@ -93,8 +97,6 @@ fn main() -> eframe::Result {
 
 #[derive(Serialize, Deserialize)]
 pub struct LOGazerConfig {
-    pub win_x: f32,
-    pub win_y: f32,
     pub quality_threshold: Quality,
 }
 
@@ -102,33 +104,8 @@ pub struct LOGazerConfig {
 impl Default for LOGazerConfig {
     fn default() -> Self {
         Self {
-            win_x: -1.,
-            win_y: -1.,
             quality_threshold: Quality::Rare,
         }
-    }
-}
-
-impl LOGazerConfig {
-    fn is_defined(self: Self) -> bool { self.win_x >= 0. && self.win_y >= 0. }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-/// Lootbox
-//////////////////////////////////////////////////////////////////////////////
-
-pub struct Lootbox {
-}
-
-
-impl Lootbox {
-    // fn add_trophy(ref windows_capture::frame::Frame trophy) {
-
-    // }
-
-    fn get_trophy(self) -> ColorImage {
-        let img = ColorImage::filled([SHOT_WIDTH, SHOT_HEIGHT], Color32::BLACK);
-        return img;
     }
 }
 
@@ -137,6 +114,7 @@ impl Lootbox {
 //////////////////////////////////////////////////////////////////////////////
 
 struct LOGazer {
+    #[allow(unused)]
     config: LOGazerConfig,
     quality_threshold: Arc<Mutex<Quality>>,
     update_need: Arc<AtomicBool>,
@@ -144,10 +122,11 @@ struct LOGazer {
     shot: Arc<Mutex<ColorImage>>,
     tex: TextureHandle,
     // notes: String,
+    #[allow(unused)]
     ctx: egui::Context,
 }
 
-fn init_fonts(_ctx: &egui::Context) {
+// fn init_fonts(_ctx: &egui::Context) {
     // let mut font_def = FontDefinitions::default();
     // font_def.font_data.insert(
     //     "8370".to_owned(),
@@ -164,7 +143,7 @@ fn init_fonts(_ctx: &egui::Context) {
     //     .or_default()
     //     .push("3270".to_owned());
     // ctx.set_fonts(font_def);
-}
+// }
 
 /////////////////////////////////////////
 /// LOGazer
@@ -173,7 +152,7 @@ fn init_fonts(_ctx: &egui::Context) {
 pub fn ts_now() -> String {
     Local::now().format("%Y%m%d%H%M%S").to_string()
 }
-
+#[allow(unused)]
 fn fill_noise(canvas: &mut ColorImage) {
     let w = canvas.width();
     let h = canvas.height();
@@ -212,13 +191,15 @@ fn save(ss: &Screenshot) {
 }
 
 impl LOGazer {
-
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // init_fonts(&cc.egui_ctx);
         egui_extras::install_image_loaders(&cc.egui_ctx);
-
-        let config: LOGazerConfig = confy::load("logazer", None).unwrap_or_default();
-        let quality_threshold = Arc::new(Mutex::new(Quality::Common));
+        let config: LOGazerConfig =  if let Some(storage) = cc.storage {
+            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
+        } else {
+            LOGazerConfig::default()
+        };
+        let quality_threshold = Arc::new(Mutex::new(config.quality_threshold));
         let update_need = Arc::new(AtomicBool::new(false));
         let raw_shot = ColorImage::filled([SHOT_WIDTH, SHOT_HEIGHT], Color32::BLACK);
         let shot = Arc::new(Mutex::new(raw_shot));
@@ -234,30 +215,40 @@ impl LOGazer {
         // start thread
         thread::spawn(move || {
             eprintln!("screenshot receiver spawned");
-            loop {
-                match rx.try_recv() {
-                    Ok(ss) => {
-                        let threshold = *quality_threshold_clone.lock().unwrap();
-                        if ss.meta.quality >= threshold {
-                            save(&ss);
-                            paint(&mut shot_clone.lock().unwrap(), &ss);
-                            update_need_clone.store(true, Ordering::Relaxed);
-                            ctx_clone.request_repaint();
+            if USE_TRY_RECV {
+                    loop {
+                    match rx.try_recv() {
+                        Ok(ss) => {
+                            let threshold = *quality_threshold_clone.lock().unwrap();
+                            if ss.meta.quality >= threshold {
+                                save(&ss);
+                                paint(&mut shot_clone.lock().unwrap(), &ss);
+                                update_need_clone.store(true, Ordering::Relaxed);
+                                ctx_clone.request_repaint();
+                            }
+                        } // Ok
+                        Err(TryRecvError::Empty) => {
+                            //     let t = Instant::now();
+                            //     fill_noise(&mut shot_clone.lock().unwrap());
+                            //     eprintln!("no data. noise spent {:?}...", t.elapsed());
+                            //     update_need_clone.store(true, Ordering::Relaxed);
+                            //     ctx_clone.request_repaint();
+                            thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_NOISE));
+                        } // Empty
+                        Err(TryRecvError::Disconnected) => {
+                            eprintln!("screenshot receiver disconnected");
+                            break;
                         }
-                    } // Ok
-                    Err(TryRecvError::Empty) => {
-                        if false {
-                            let t = Instant::now();
-                            fill_noise(&mut shot_clone.lock().unwrap());
-                            // eprintln!("no data. noise spent {:?}...", t.elapsed());
-                            update_need_clone.store(true, Ordering::Relaxed);
-                            ctx_clone.request_repaint();
-                        }
-                        thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_NOISE));
-                    } // Empty
-                    Err(TryRecvError::Disconnected) => {
-                        eprintln!("screenshot receiver disconnected");
-                        break;
+                    }
+                }
+            } else {
+                for ss in rx {
+                    let threshold = *quality_threshold_clone.lock().unwrap();
+                    if ss.meta.quality >= threshold {
+                        save(&ss);
+                        paint(&mut shot_clone.lock().unwrap(), &ss);
+                        update_need_clone.store(true, Ordering::Relaxed);
+                        ctx_clone.request_repaint();
                     }
                 }
             }
@@ -328,6 +319,7 @@ impl LOGazer {
                                 }
                             });
                     *self.quality_threshold.lock().unwrap() = quality;
+                    self.config.quality_threshold = quality;
                 });
             });
         }); // TopBottomPanel::top
@@ -352,7 +344,7 @@ impl LOGazer {
 /////////////////////////////////////////
 
 impl eframe::App for LOGazer {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_visuals(Visuals::dark());
         self.render_header(ctx);
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -376,5 +368,9 @@ impl eframe::App for LOGazer {
             }); // ui.vertical
         });
         ctx.request_repaint_after(Duration::from_millis(COFFEE_BREAK_BETWEEN_REPAINTS));
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, &self.config);
     }    
 }

@@ -7,9 +7,9 @@ edition = "2024"
 
 [dependencies]
 chrono = { version = "0.4.44", features = ["clock"] }
-confy = "2.0.0"
 crossbeam-channel = "0.5.15"
-eframe = "0.33.3"
+eframe = { version = "0.33.3", features = ["persistence"] }
+egui = { version = "0.33.3", features = ["persistence"] }
 egui-twemoji = "0.8.0"
 egui_extras = { version = "0.33.3", features = ["svg"] }
 env_logger = "0.11.9"

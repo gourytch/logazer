@@ -1,7 +1,6 @@
-use epaint::Color32;
 use windows_capture::frame::{Frame, Error};
 use windows_capture::settings::ColorFormat;
-use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba};
+use image::{DynamicImage, ImageBuffer, Rgba};
 
 
 pub fn image_from_frame(frame: &mut Frame) -> Result<DynamicImage, Error> {

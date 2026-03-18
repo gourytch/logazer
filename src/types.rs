@@ -1,9 +1,8 @@
 use epaint::Color32;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use image::{DynamicImage, Rgba};
+use image::{DynamicImage};
 
-pub const EMPTY_TITLE: &'static str = "";
 pub const NO_COORD: u32 = 9999999;
 
 pub const COLOR_QUALITY_UNKNOWN: Color32 = Color32::from_rgb(128, 128, 128);
@@ -13,6 +12,7 @@ pub const COLOR_QUALITY_RARE: Color32 = Color32::from_rgb(0, 113,218);
 pub const COLOR_QUALITY_EPIC: Color32 = Color32::from_rgb(218, 64,166);
 pub const COLOR_QUALITY_LEGENDARY: Color32 = Color32::from_rgb(218, 159,57);
 
+#[allow(unused)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ViewType {
     Unknown,
@@ -22,6 +22,7 @@ pub enum ViewType {
 
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[allow(unused)]
 pub enum Entity {
     Unknown,
     Bush,
@@ -36,6 +37,7 @@ impl Entity {
             Entity::Bush => "Bush",
             Entity::Wood => "Wood",
             Entity::Stone => "Stone",
+            #[allow(unused)]
             _ => "Unhandled",
         }
     }
@@ -107,11 +109,7 @@ impl Meta {
         (self.quality == other.quality) && (self.entity == other.entity)
     }
 
-    pub fn parse(shot: &DynamicImage) -> Self {
-        Meta::empty()
-    }
-
-
+    #[allow(unused)]
     pub fn to_str(&self) -> String {
         format!("(quality:{}, entity:'{}')", self.quality.to_str(), &self.entity.to_str())
     }
