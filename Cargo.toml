@@ -1,0 +1,20 @@
+[package]
+name = "logazer"
+version = "0.1.0"
+authors = ["Lev Babchenko <lvbabchenko@gmail.com>"]
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.44", features = ["clock"] }
+confy = "2.0.0"
+crossbeam-channel = "0.5.15"
+eframe = "0.33.3"
+egui-twemoji = "0.8.0"
+egui_extras = { version = "0.33.3", features = ["svg"] }
+env_logger = "0.11.9"
+epaint = "0.33.3"
+image = "0.25.10"
+rand = "0.10.0"
+serde = { version = "1.0.228", features = ["derive"] }
+windows-capture = "1.5.0"
