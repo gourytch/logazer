@@ -18,17 +18,30 @@ use crossbeam_channel::{Sender, TrySendError};
 use crate::imagework::image_from_frame;
 use crate::types::{Meta, Screenshot};
 
-const WINDOW_NAME: &'static str = "Last Oasis  ";
+const WINDOW_TITLE: &'static str = "Last Oasis  ";
 const COFFEE_BREAK_FOR_WATCHER: u64 = 100;
 
-fn get_focused() -> Result<Window, Error> {
-    let wnd = Window::foreground()?;
-    let title= wnd.title()?;
-    
-    if title != WINDOW_NAME {
-        return Err(Error::NotFound(WINDOW_NAME.to_string()));
+// get focused Last Oasis window 
+fn get_focused() -> Option<Window> {
+    match Window::foreground() {
+        Err(_) => {
+            return None;
+        }
+        Ok(wnd) => {
+            match wnd.title() {
+                Err(_) => {
+                    return None;
+                }
+                Ok(t) => {
+                    if t == WINDOW_TITLE {
+                        return Some(wnd);
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
     }
-    return Ok(wnd);
 }
 
 ///////////////////////////////////
@@ -177,7 +190,7 @@ impl Watcher {
             let stop_grabbing: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
             while !stop_flag.load(Ordering::Relaxed) {
-                let new_window = get_focused().ok();
+                let new_window = get_focused();
                 if new_window != prev_window {
                     // Let' assume we DON'T HAVE multiple LO windows,
                     // so we're start recording when we got new active LO window 

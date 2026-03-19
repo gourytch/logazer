@@ -35,10 +35,7 @@ const COLOR_QUALITY_RARE_RGBA: Rgba<u8> = rgba(COLOR_QUALITY_RARE);
 const COLOR_QUALITY_EPIC_RGBA: Rgba<u8> = rgba(COLOR_QUALITY_EPIC);
 const COLOR_QUALITY_LEGENDARY_RGBA: Rgba<u8> = rgba(COLOR_QUALITY_LEGENDARY);
 
-const DARK_VALUE: u32 = 32;
 const DRIFT_VALUE: u32 = 10;
-
-const DARK_THRESHOLD3: u32 = 3 * DARK_VALUE; 
 const DRIFT_THRESHOLD3: u32 = 3 * DRIFT_VALUE; 
 
 // const COLOR_DARK: Color32 = Color32::from_rgb(DARK_VALUE as u8, DARK_VALUE as u8, DARK_VALUE as u8);
@@ -154,7 +151,7 @@ fn rgba_diff2(a: Rgba<u8>, b:Rgba<u8>) -> u32 {
 #[allow(unused)]
 #[inline]
 fn is_dark(a: Rgba<u8>) -> bool {
-    (a[0] as u32 + a[1] as u32 + a[2] as u32) < DARK_THRESHOLD3 &&
+    // (a[0] as u32 + a[1] as u32 + a[2] as u32) < DARK_THRESHOLD3 &&
         (a[0] < 100) && (a[1] < 100) && (a[2] < 100) // for T0..T4 quality at least one color > 200 and at least one of two left > 100
 
 }
@@ -195,6 +192,7 @@ fn ddist(image: &DynamicImage, cx: u32, cy: u32, dx: i32, dy: i32, c: Rgba<u8>, 
 
 
 fn adjust_center(image: &DynamicImage, sd: &ScreenCoords, cx0: u32, cy0: u32) -> (u32, u32) {
+    const VERBOSE_TEST: bool = false;
     let mut cx = cx0;
     let mut cy = cy0;
 
@@ -210,6 +208,9 @@ fn adjust_center(image: &DynamicImage, sd: &ScreenCoords, cx0: u32, cy0: u32) ->
         cx = cxx;
         cy = cyy;
         if ok { break; }
+    }
+    if VERBOSE_TEST {
+        eprintln!("adjust_center ({},{}) -> ({},{})", cx0, cy0, cx, cy);
     }
     (cx, cy)
 }
@@ -230,6 +231,16 @@ fn adjust_center(image: &DynamicImage, sd: &ScreenCoords, cx0: u32, cy0: u32) ->
 //
 
 fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: bool) -> (bool, Option<RgbaImage>) {
+    const VERBOSE_TEST: bool = false;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static ID: AtomicU32 = AtomicU32::new(0);
+    let id = ID.fetch_add(1, Ordering::Relaxed);
+
+    //Rgba<u8> {image::Rgba([c.r(), c.g(), c.b(), 255])}
+    const COLOR_GOOD: Rgba<u8> = image::Rgba([0u8, 200u8, 0u8, 255u8]);
+    const COLOR_BAD: Rgba<u8> = image::Rgba([200u8, 0u8, 0u8, 255u8]);
+
     let d12 = sd.rhombus_size / 2;
     let d38 = sd.rhombus_size * 7 / 16;
     let d32 = sd.rhombus_size * 3 / 4; // the half from 3/2
@@ -244,13 +255,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
 
     let mut checkmap: Option<RgbaImage> = if test {Some(ImageBuffer::new(w, h))} else {None};
 
-    // eprintln!("check range x=({};{}) {}x{} ...", x0, x0, w, h);
-    // let fname = format!("cropped-{}_{}_{}_{}.png", x0, y0, w, h);
-    // let crop = image.crop_imm(x0, y0, w, h);
-    // if let Err(err) = crop.save(&fname) {
-    //     eprintln!("crop {} not saved: {}", &fname, err);
-    // }
-
+    if VERBOSE_TEST { eprintln!("check range x=({};{}) {}x{} ...", x0, x0, w, h); }
 
     for y in 0..h {
         for x in 0..w {
@@ -259,7 +264,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
             let dx = abs_diff(xx, lm.cx);
             let dy = abs_diff(yy, lm.cy);
             let c = image.get_pixel(xx, yy);
-            let c_dark = !is_colorful(c); // is_dark(c);
+            let c_dark = is_dark(c); // !is_colorful(c); // is_dark(c);
             let c_diff = rgba_diff(c, lm.rgba);
             let c_match = c_diff < DRIFT_THRESHOLD3;
             let ok = if dx + dy <= d38 {
@@ -273,32 +278,49 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
                     true
                 } else {
                     // outer space, must be dark
-                    // if !c_dark {
-                    //     eprintln!("outer space, color {:?} should be dark", c);
-                    // }
+                    if !c_dark {
+                        if VERBOSE_TEST { eprintln!("outer space, color {:?} should be dark", c); }
+                    }
                     c_dark
                 };
             if !ok {
                 counter += 1;
             }
             if let Some(ref mut canvas) = checkmap {
-                let cc: Rgba<u8> = image::Rgba([if ok {c[0]} else {255u8}, if ok {255u8} else {c[1]}, c[2], 255u8]);
+                let cc: Rgba<u8> = if ok {COLOR_GOOD} else {COLOR_BAD};
                 canvas.put_pixel(x, y, cc);
             }
         }
     }
     let err_rate_percent = counter * 100 / ((x1-x0) * (y1-y0));
     let ok = err_rate_percent < ERR_RATE_PERCENT_THRESHOLD;
-    // eprintln!("check_rhombus counter={}, err_rate_percent={}, ok={}", counter, err_rate_percent, ok);
+    if VERBOSE_TEST {eprintln!("check_rhombus id={} counter={}, err_rate_percent={}, ok={}", id, counter, err_rate_percent, ok);}
+    if test {
+        let fname = format!("./tmp/check_rhombus-id={}-{}_{}_{}_{}.png", id, x0, y0, w, h);
+        let mut pix: RgbaImage = ImageBuffer::new(w*2, h);
+        let errmap = checkmap.as_ref().unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                pix.put_pixel(x, y, image.get_pixel(x+x0, y+y0));
+                pix.put_pixel(x+w, y, *errmap.get_pixel(x, y));
+            }
+        }
+        if let Err(err) = pix.save(&fname) {
+            if VERBOSE_TEST {eprintln!("debug image {} not saved: {}", &fname, err);}
+        }
+    }
+
     (ok, checkmap)
 }
 
 
 // search for line with solid color, before and de after - dark color
 fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Option<LineMatch>, Option<RgbaImage>) {
+    const VERBOSE_TEST: bool = false;
+
     let (w, h) = image.dimensions();
     if w != sd.screen_width || h != sd.screen_height {
-        // eprintln!("dimensions mismatch: {}x{} vs {}x{}", w, h, sd.screen_width, sd.screen_height);
+        if VERBOSE_TEST { eprintln!("dimensions mismatch: {}x{} vs {}x{}", w, h, sd.screen_width, sd.screen_height); }
         return (None, None)
     }
     let x0 = (w - sd.title_width) / 2; // left boundary for searching
@@ -315,13 +337,13 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
             was_bright = true;
         } else {
             // dark pixel or any faded color
-            if was_bright {
+             if was_bright {
                 let x_right = x - 1;
                 let x_len =  x_right - x_left + 1;
-                // eprintln!("   check light spot x=[{}..{}], L={})", x_left, x_right, x_len);            
+                if VERBOSE_TEST {eprintln!("   check light spot x=[{}..{}], L={})", x_left, x_right, x_len);}
                 if abs_diff(sd.rhombus_size, x_len) < 4 {
                     // it seems we found light spot. and it is big enough but not so much
-                    // eprintln!("   light spot x=[{}..{}], L={}) has good size", x_left, x_right, x_len);
+                    if VERBOSE_TEST {eprintln!("   light spot x=[{}..{}], L={}) has good size", x_left, x_right, x_len);}
                     let cx = (x_left + x) / 2;
                     let cm = image.get_pixel(cx, y);
                     // check for solidity
@@ -332,7 +354,7 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
                     for i in 0 .. dd {
                         let c = image.get_pixel(x0 + i, y);
                         let d1 = rgba_diff(cm, c);
-                        // eprintln!("   [{}] ({};{}) rgba_diff({:?}, {:?}) = {}", i, x0 + i, y, cm, c, d1);
+                        if VERBOSE_TEST {eprintln!("   [{}] ({};{}) rgba_diff({:?}, {:?}) = {}", i, x0 + i, y, cm, c, d1);}
                         s += d1
                     }
                     let d = s / dd;
@@ -355,10 +377,10 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
                             return (Some(lm), checkmap);
                         }
                     } else {
-                        // eprintln!("... dirty");
+                        if VERBOSE_TEST {eprintln!("... dirty");}
                     }
                 } else {
-                    // eprintln!("... size mismatch");
+                    if VERBOSE_TEST {eprintln!("... size mismatch");}
                 }
             } else {
                 // eprintln!("... in the darkness");
@@ -367,7 +389,7 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
             was_bright = false;
         }
     }
-    // eprintln!("found nothing");
+    if VERBOSE_TEST { eprintln!("found nothing"); }
     (None, None) // did not find anything valuable
 }
 

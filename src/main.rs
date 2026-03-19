@@ -288,6 +288,8 @@ impl LOGazer {
 
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    eprintln!("main.watcher: running: {:?}, grabbing:{:?}, capturing:{:?}",
+                        self.watcher.is_running(), self.watcher.is_grabbing(), self.watcher.is_capturing());
                     let active = self.watcher.is_grabbing() || self.watcher.is_capturing();
                     EmojiLabel::new(if active {ICON_WATCHING} else {ICON_SLEEPING}).show(ui);
                     ui.spacing();
