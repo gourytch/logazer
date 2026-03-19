@@ -149,9 +149,6 @@ struct LOGazer {
 /// LOGazer
 /////////////////////////////////////////
 
-pub fn ts_now() -> String {
-    Local::now().format("%Y%m%d%H%M%S").to_string()
-}
 #[allow(unused)]
 fn fill_noise(canvas: &mut ColorImage) {
     let w = canvas.width();
@@ -176,9 +173,10 @@ fn paint(canvas: &mut ColorImage, ss: &Screenshot) {
     canvas.as_raw_mut().copy_from_slice(&data);
 }
 
-fn save(ss: &Screenshot) {
-    let time = ts_now();
-    let suffix = format!("{}_{}", ss.meta.quality.to_str(), ss.meta.entity.to_str());
+fn save(ss: &Screenshot) {    
+    let time = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    // let suffix = format!("{}_{}", ss.meta.quality.to_str(), ss.meta.entity.to_str());
+    let suffix = format!("{}", ss.meta.quality.to_str());
     let path = format!("{}/{}-{}.png", SCREENSHOT_PATH, time, suffix);
     if let Err(err) = fs::create_dir_all(SCREENSHOT_PATH) {
         println!("create_dir_all error {}", err);
