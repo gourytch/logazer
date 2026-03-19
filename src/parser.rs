@@ -40,7 +40,7 @@ const DRIFT_THRESHOLD3: u32 = 3 * DRIFT_VALUE;
 
 // const COLOR_DARK: Color32 = Color32::from_rgb(DARK_VALUE as u8, DARK_VALUE as u8, DARK_VALUE as u8);
 
-const ERR_RATE_PERCENT_THRESHOLD: u32 = 10;
+const ERR_RATE_PERCENT_THRESHOLD: u32 = 20; // 1/5
 
 
 //////////////////////////////////////////////////////////////////////////////
@@ -240,6 +240,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
     //Rgba<u8> {image::Rgba([c.r(), c.g(), c.b(), 255])}
     const COLOR_GOOD: Rgba<u8> = image::Rgba([0u8, 200u8, 0u8, 255u8]);
     const COLOR_BAD: Rgba<u8> = image::Rgba([200u8, 0u8, 0u8, 255u8]);
+    const COLOR_IGNORE: Rgba<u8> = image::Rgba([100u8, 0u8, 100u8, 255u8]);
 
     let d12 = sd.rhombus_size / 2;
     let d38 = sd.rhombus_size * 7 / 16;
@@ -267,27 +268,27 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
             let c_dark = is_dark(c); // !is_colorful(c); // is_dark(c);
             let c_diff = rgba_diff(c, lm.rgba);
             let c_match = c_diff < DRIFT_THRESHOLD3;
-            let ok = if dx + dy <= d38 {
+            let (ok, ignore) = if dx + dy <= d38 {
                     // inner zone, color must match
                     // if !c_match {
                     //     eprintln!("inner zone, color {:?} mismatch with {:?} by {}", c, lm.rgba, c_diff);
                     // }
-                    c_match
+                    (c_match, false)
                 } else if dx + dy <= d12 {
                     // twilight zone. ignore the color check
-                    true
+                    (true, true)
                 } else {
                     // outer space, must be dark
                     if !c_dark {
                         if VERBOSE_TEST { eprintln!("outer space, color {:?} should be dark", c); }
                     }
-                    c_dark
+                    (c_dark, false)
                 };
             if !ok {
                 counter += 1;
             }
             if let Some(ref mut canvas) = checkmap {
-                let cc: Rgba<u8> = if ok {COLOR_GOOD} else {COLOR_BAD};
+                let cc: Rgba<u8> = if ignore {COLOR_IGNORE} else if ok {COLOR_GOOD} else {COLOR_BAD};
                 canvas.put_pixel(x, y, cc);
             }
         }
@@ -465,28 +466,49 @@ mod tests {
     }
 
 
+    #[allow(unused)]
+    fn diamond_check_quality_for_px(path: String, quality: Quality) -> bool {
+        const VERBOSE_TEST: bool = false;
+        let input = load_image(path.clone());
+        let (reported_quality, report) = parse_rhombus_quality(&input, true);
+        let report_name = format!("diamond_check_quality_for_px");
+        save_report_png(&report, report_name.clone());
+        if VERBOSE_TEST {eprintln!("diamond_check_quality_for_px({}, {}) q={}", &path, quality.to_str(), reported_quality.to_str());}
+        reported_quality == quality
+    }
+
     // check if all the samples in subdir assets/test/Quality/{Quality.to_str()}/
     // has (detected_quality == quality) == outcome
     #[allow(unused)]
     fn batch_diamond_check(quality: Quality, outcome: bool) -> bool {
+        const VERBOSE_TEST: bool = false;
         let test_name = format!("{}{}", quality.to_str(), if outcome {"+"} else {"-"});
         let test_pathname = format!("./assets/test/batch_diamond_check/{}", test_name);
         let test_dir = Path::new(&test_pathname);
         let mut all_matched = true;
         for entry in fs::read_dir(test_dir).unwrap() {
             let path = entry.unwrap().path();
-            let strpath = path.display().to_string();
-            let picname = path.file_stem()
+            let str_path = path.display().to_string();
+            let pic_name = path.file_stem()
                 .and_then(|os_str| os_str.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_default();
-            let input = load_image(strpath);
+            let input = load_image(str_path.clone());
             let (reported_quality, report) = parse_rhombus_quality(&input, true);
-            let report_name = format!("batch_diamond_check.{}.{}",test_name, picname);
+            let report_name = format!("batch_diamond_check.{}.{}", &test_name, &pic_name);
             save_report_png(&report, report_name);
+            if VERBOSE_TEST {eprintln!("batch_diamond_check({}, {}) pix={}, q={}", quality.to_str(), &outcome, &str_path, reported_quality.to_str());}
             if (reported_quality == quality) != outcome { all_matched = false; }
         }
         all_matched
+    }
+
+    ///// SINGLE TEST
+    #[test]
+    fn test_1() {
+        // assert!(diamond_check_quality_for_px("./assets/test/batch_diamond_check/Common+/shot-20260319_202641-LastOasis.png".to_string(), Quality::Common));
+        // assert!(diamond_check_quality_for_px("./assets/test/batch_diamond_check/Rare+/shot-20260319_202623-LastOasis.png".to_string(), Quality::Rare));
+//        assert!(diamond_check_quality_for_px("./assets/test/batch_diamond_check/Rare+/shot-20260319_202644-LastOasis.png.png".to_string(), Quality::Rare));
     }
 
     ///// diamond check Quality::Unknown
