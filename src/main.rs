@@ -21,10 +21,13 @@ mod grabber;
 mod processor;
 mod imagework;
 mod parser;
+mod historybar;
+
 
 use crate::types::{Quality, Screenshot};
 use crate::grabber::Watcher;
 use crate::processor::new_processor_pipeline;
+use crate::historybar::HistoryBar;
 
 const USE_TRY_RECV: bool = false;
 
@@ -59,7 +62,7 @@ const COLOR_SLEEPING: Color32 = Color32::from_rgb(128,128,255);
 const COLOR_WATCHING: Color32 = Color32::from_rgb(255,255,128);
 
 const SCREENSHOT_PATH: &'static str = "./screenshots/";
-
+const HISTORY_SIZE: usize = 100;
 
 //////////////////////////////////////////////////////////////////////////////
 /// main
@@ -121,6 +124,7 @@ struct LOGazer {
     watcher: Watcher,
     shot: Arc<Mutex<ColorImage>>,
     tex: TextureHandle,
+    history_bar: Arc<Mutex<HistoryBar>>,
     // notes: String,
     #[allow(unused)]
     ctx: egui::Context,
@@ -202,14 +206,17 @@ impl LOGazer {
         let raw_shot = ColorImage::filled([SHOT_WIDTH, SHOT_HEIGHT], Color32::BLACK);
         let shot = Arc::new(Mutex::new(raw_shot));
         let tex = cc.egui_ctx.load_texture("shot", shot.lock().unwrap().clone(), TextureOptions::NEAREST);
+        let history_bar = Arc::new(Mutex::new(HistoryBar::new(HISTORY_SIZE)));
         let (tx, rx) = new_processor_pipeline();
-        let mut watcher = Watcher::new(tx);
-        watcher.start();
+        
+        let mut window_watcher = Watcher::new(tx);
+        window_watcher.start();
 
         let quality_threshold_clone = quality_threshold.clone();
         let shot_clone = shot.clone();
         let update_need_clone = update_need.clone();
         let ctx_clone = cc.egui_ctx.clone();
+        let history_bar_clone = Arc::clone(&history_bar);
         // start thread
         thread::spawn(move || {
             eprintln!("screenshot receiver spawned");
@@ -217,13 +224,21 @@ impl LOGazer {
                     loop {
                     match rx.try_recv() {
                         Ok(ss) => {
+                            let quality = ss.meta.quality;
+                            eprintln!("received quality {}", quality.to_str());
+                            if let Ok(mut bar) = history_bar_clone.lock() {
+                                eprintln!("push color for quality {}", quality.to_str());
+                                bar.push(quality.to_color32());
+                            } else {
+                                eprintln!("NOT PUSHED color for quality {}", quality.to_str());
+                            }
                             let threshold = *quality_threshold_clone.lock().unwrap();
-                            if ss.meta.quality >= threshold {
+                            if quality >= threshold {
                                 save(&ss);
                                 paint(&mut shot_clone.lock().unwrap(), &ss);
-                                update_need_clone.store(true, Ordering::Relaxed);
-                                ctx_clone.request_repaint();
                             }
+                            update_need_clone.store(true, Ordering::Relaxed);
+                            ctx_clone.request_repaint();
                         } // Ok
                         Err(TryRecvError::Empty) => {
                             //     let t = Instant::now();
@@ -241,8 +256,15 @@ impl LOGazer {
                 }
             } else {
                 for ss in rx {
+                    let quality = ss.meta.quality;
+                    if let Ok(mut bar) = history_bar_clone.lock() {
+                        bar.push(quality.to_color32());
+                    } else {
+                        eprintln!("NOT PUSHED color for quality {}", quality.to_str());
+                    }
+
                     let threshold = *quality_threshold_clone.lock().unwrap();
-                    if ss.meta.quality >= threshold {
+                    if quality >= threshold {
                         save(&ss);
                         paint(&mut shot_clone.lock().unwrap(), &ss);
                         update_need_clone.store(true, Ordering::Relaxed);
@@ -257,11 +279,12 @@ impl LOGazer {
             ctx: cc.egui_ctx.clone(),
             config: config,
             quality_threshold: quality_threshold,
-            watcher: watcher,
+            watcher: window_watcher,
             // notes: String::new(),
             update_need: update_need,
             shot: shot,
             tex: tex,
+            history_bar: history_bar,
         }
     }
 
@@ -285,15 +308,15 @@ impl LOGazer {
             }
 
             egui::MenuBar::new().ui(ui, |ui| {
+                ui.style_mut().interaction.selectable_labels = false;
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    eprintln!("main.watcher: running: {:?}, grabbing:{:?}, capturing:{:?}",
-                        self.watcher.is_running(), self.watcher.is_grabbing(), self.watcher.is_capturing());
-                    let active = self.watcher.is_grabbing() || self.watcher.is_capturing();
+                    let active = self.watcher.active();
+                    // eprintln!("active: {}", active);
                     EmojiLabel::new(if active {ICON_WATCHING} else {ICON_SLEEPING}).show(ui);
                     ui.spacing();
                     ui.label(RichText::new(" [Last Oasis]: Gazer").color(if active {COLOR_WATCHING} else {COLOR_SLEEPING}));
                 });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {                        
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // ui.colored_label(qvalue.to_color32(), qvalue.to_str());
 
                     let close_btn = ui.add(Button::new(ICON_CLOSE));
@@ -320,6 +343,9 @@ impl LOGazer {
                             });
                     *self.quality_threshold.lock().unwrap() = quality;
                     self.config.quality_threshold = quality;
+                    if let Ok(history_bar) = self.history_bar.lock() {
+                        ui.add(history_bar.clone());
+                    }
                 });
             });
         }); // TopBottomPanel::top
@@ -347,24 +373,12 @@ impl eframe::App for LOGazer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_visuals(Visuals::dark());
         self.render_header(ctx);
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().inner_margin(0.))
+            .show(ctx, |ui| {
             //** render all the GUI **//
             ui.vertical(|ui| {
-
                 self.render_shot(ui, ctx);
-
-                // ui.separator();
-
-                // let (console_rect, _console_resp) = ui.allocate_exact_size(
-                //     egui::vec2(PREVIEWER_WIDTH, PREVIEWER_HEIGHT),
-                //     egui::Sense::hover(),
-                // );
-
-                // ui.separator();
-
-                // ScrollArea::vertical().show(ui, |ui| {
-                //     ui.add(egui::TextEdit::multiline(&mut self.notes));
-                // });
             }); // ui.vertical
         });
         ctx.request_repaint_after(Duration::from_millis(COFFEE_BREAK_BETWEEN_REPAINTS));

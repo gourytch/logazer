@@ -126,6 +126,16 @@ pub struct Screenshot {
 }
 
 impl Screenshot {
+    pub fn new(image: DynamicImage) -> Self {
+         Self {
+            pit_captured: Instant::now(),
+            pit_received: None,
+            pit_parsed: None,
+            image: image,
+            meta: Meta::empty(),            
+        }
+    }
+
     pub fn set_received(&mut self) {
         let t = Instant::now();
         println!("received in {:?}", t.duration_since(self.pit_captured));
