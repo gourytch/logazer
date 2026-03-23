@@ -2291,6 +2291,7 @@ dependencies = [
  "env_logger",
  "epaint",
  "image",
+ "log",
  "rand 0.10.0",
  "serde",
  "windows-capture",

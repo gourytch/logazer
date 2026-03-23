@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::{fs, thread};
 use std::time::{Duration};
 use serde::{Serialize, Deserialize};
+use log::{trace,info,warn};
 
-use crossbeam_channel::TryRecvError;
+use crossbeam_channel::{Select};
 
 use eframe::egui::{
     self, Align, Button, Color32, ColorImage, Image, Layout, RichText, TextureHandle, TextureOptions, TopBottomPanel, Visuals
@@ -29,10 +30,8 @@ use crate::grabber::Watcher;
 use crate::processor::new_processor_pipeline;
 use crate::historybar::HistoryBar;
 
-const USE_TRY_RECV: bool = false;
-
-const COFFEE_BREAK_FOR_NOISE: u64 = 10;
-const COFFEE_BREAK_BETWEEN_REPAINTS: u64 = 100;
+const COFFEE_BREAK_FOR_NOISE: u64 = 33;
+// const COFFEE_BREAK_BETWEEN_REPAINTS: u64 = 100;
 
 // use windows_capture::frame::Frame;
 
@@ -69,7 +68,7 @@ const HISTORY_SIZE: usize = 100;
 //////////////////////////////////////////////////////////////////////////////
 
 fn main() -> eframe::Result {
-    env_logger::init();
+    info!("started");
     
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -161,8 +160,10 @@ fn fill_noise(canvas: &mut ColorImage) {
     for y in 0..h {
         for x in 0..w {
             let i = y * w + x;
-            let rgb: [u8;3] = rng.random();
-            canvas.pixels[i] = Color32::from_rgb(rgb[0],rgb[1],rgb[2]);
+            let c: u8 = (rng.random::<u8>() >> 2) + 128; // [0..64) -> [128..192)
+            // let rgb: [u8;3] = rng.random();
+            // canvas.pixels[i] = Color32::from_rgb(rgb[0],rgb[1],rgb[2]);
+            canvas.pixels[i] = Color32::from_rgb(c,c,c);
         }
     }
 }
@@ -220,57 +221,49 @@ impl LOGazer {
         // start thread
         thread::spawn(move || {
             eprintln!("screenshot receiver spawned");
-            if USE_TRY_RECV {
-                    loop {
-                    match rx.try_recv() {
-                        Ok(ss) => {
-                            let quality = ss.meta.quality;
-                            eprintln!("received quality {}", quality.to_str());
-                            if let Ok(mut bar) = history_bar_clone.lock() {
-                                eprintln!("push color for quality {}", quality.to_str());
-                                bar.push(quality.to_color32());
-                            } else {
-                                eprintln!("NOT PUSHED color for quality {}", quality.to_str());
+
+            let generate_noise = || {
+                fill_noise(&mut shot_clone.lock().unwrap());
+                update_need_clone.store(true, Ordering::Relaxed);
+                ctx_clone.request_repaint();
+            };
+
+            let process_frame = |ss: Screenshot| {
+                let quality = ss.meta.quality;
+                if let Ok(mut bar) = history_bar_clone.lock() {
+                    bar.push(quality.to_color32());
+                }
+                let threshold = *quality_threshold_clone.lock().unwrap();
+                if quality >= threshold {
+                    save(&ss);
+                    paint(&mut shot_clone.lock().unwrap(), &ss);
+                }
+                update_need_clone.store(true, Ordering::Relaxed);
+                ctx_clone.request_repaint();
+            };
+
+            let warmup = || -> Option<Screenshot> {
+                let mut sel = Select::new();
+                let op_rx = sel.recv(&rx);
+                let noise_interval = Duration::from_millis(COFFEE_BREAK_FOR_NOISE);
+                loop {
+                    let oper = sel.select_timeout(noise_interval);                   
+                    match oper {
+                        Ok(o) if o.index() == op_rx => {
+                            match o.recv(&rx) {
+                                Ok(ss) => return Some(ss),
+                                Err(_) => return None,
                             }
-                            let threshold = *quality_threshold_clone.lock().unwrap();
-                            if quality >= threshold {
-                                save(&ss);
-                                paint(&mut shot_clone.lock().unwrap(), &ss);
-                            }
-                            update_need_clone.store(true, Ordering::Relaxed);
-                            ctx_clone.request_repaint();
-                        } // Ok
-                        Err(TryRecvError::Empty) => {
-                            //     let t = Instant::now();
-                            //     fill_noise(&mut shot_clone.lock().unwrap());
-                            //     eprintln!("no data. noise spent {:?}...", t.elapsed());
-                            //     update_need_clone.store(true, Ordering::Relaxed);
-                            //     ctx_clone.request_repaint();
-                            thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_NOISE));
-                        } // Empty
-                        Err(TryRecvError::Disconnected) => {
-                            eprintln!("screenshot receiver disconnected");
-                            break;
+                        }
+                        _ => {
+                            generate_noise();
                         }
                     }
                 }
-            } else {
-                for ss in rx {
-                    let quality = ss.meta.quality;
-                    if let Ok(mut bar) = history_bar_clone.lock() {
-                        bar.push(quality.to_color32());
-                    } else {
-                        eprintln!("NOT PUSHED color for quality {}", quality.to_str());
-                    }
-
-                    let threshold = *quality_threshold_clone.lock().unwrap();
-                    if quality >= threshold {
-                        save(&ss);
-                        paint(&mut shot_clone.lock().unwrap(), &ss);
-                        update_need_clone.store(true, Ordering::Relaxed);
-                        ctx_clone.request_repaint();
-                    }
-                }
+            };
+            if let Some(first) = warmup() {
+                process_frame(first);
+                for ss in rx { process_frame(ss); }
             }
             eprintln!("screenshot receiver finished");
         });
@@ -374,14 +367,15 @@ impl eframe::App for LOGazer {
         ctx.set_visuals(Visuals::dark());
         self.render_header(ctx);
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().inner_margin(0.))
+            // .frame(egui::Frame::default().inner_margin(0.))
+            .frame(egui::Frame::default().inner_margin(GAP))
             .show(ctx, |ui| {
             //** render all the GUI **//
             ui.vertical(|ui| {
                 self.render_shot(ui, ctx);
             }); // ui.vertical
         });
-        ctx.request_repaint_after(Duration::from_millis(COFFEE_BREAK_BETWEEN_REPAINTS));
+        // ctx.request_repaint_after(Duration::from_millis(COFFEE_BREAK_BETWEEN_REPAINTS));
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

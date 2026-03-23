@@ -19,6 +19,7 @@ egui_extras = { version = "0.33.3", features = ["svg"] }
 env_logger = "0.11.9"
 epaint = "0.33.3"
 image = "0.25.10"
+log = "0.4.29"
 rand = "0.10.0"
 serde = { version = "1.0.228", features = ["derive"] }
 windows-capture = "1.5.0"
