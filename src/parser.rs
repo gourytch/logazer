@@ -1,4 +1,5 @@
 use image::{DynamicImage, ImageBuffer, RgbaImage};
+use log::trace;
 use crate::types::{Meta, Quality};
 
 
@@ -210,7 +211,7 @@ fn adjust_center(image: &DynamicImage, sd: &ScreenCoords, cx0: u32, cy0: u32) ->
         if ok { break; }
     }
     if VERBOSE_TEST {
-        eprintln!("adjust_center ({},{}) -> ({},{})", cx0, cy0, cx, cy);
+        trace!("adjust_center ({},{}) -> ({},{})", cx0, cy0, cx, cy);
     }
     (cx, cy)
 }
@@ -256,7 +257,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
 
     let mut checkmap: Option<RgbaImage> = if test {Some(ImageBuffer::new(w, h))} else {None};
 
-    if VERBOSE_TEST { eprintln!("check range x=({};{}) {}x{} ...", x0, x0, w, h); }
+    if VERBOSE_TEST { trace!("check range x=({};{}) {}x{} ...", x0, x0, w, h); }
 
     for y in 0..h {
         for x in 0..w {
@@ -271,7 +272,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
             let (ok, ignore) = if dx + dy <= d38 {
                     // inner zone, color must match
                     // if !c_match {
-                    //     eprintln!("inner zone, color {:?} mismatch with {:?} by {}", c, lm.rgba, c_diff);
+                    //     trace!("inner zone, color {:?} mismatch with {:?} by {}", c, lm.rgba, c_diff);
                     // }
                     (c_match, false)
                 } else if dx + dy <= d12 {
@@ -280,7 +281,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
                 } else {
                     // outer space, must be dark
                     if !c_dark {
-                        if VERBOSE_TEST { eprintln!("outer space, color {:?} should be dark", c); }
+                        if VERBOSE_TEST { trace!("outer space, color {:?} should be dark", c); }
                     }
                     (c_dark, false)
                 };
@@ -295,7 +296,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
     }
     let err_rate_percent = counter * 100 / ((x1-x0) * (y1-y0));
     let ok = err_rate_percent < ERR_RATE_PERCENT_THRESHOLD;
-    if VERBOSE_TEST {eprintln!("check_rhombus id={} counter={}, err_rate_percent={}, ok={}", id, counter, err_rate_percent, ok);}
+    if VERBOSE_TEST {trace!("check_rhombus id={} counter={}, err_rate_percent={}, ok={}", id, counter, err_rate_percent, ok);}
     if test {
         let fname = format!("./tmp/check_rhombus-id={}-{}_{}_{}_{}.png", id, x0, y0, w, h);
         let mut pix: RgbaImage = ImageBuffer::new(w*2, h);
@@ -307,7 +308,7 @@ fn check_rhombus(image: &DynamicImage, sd: &ScreenCoords, lm: &LineMatch, test: 
             }
         }
         if let Err(err) = pix.save(&fname) {
-            if VERBOSE_TEST {eprintln!("debug image {} not saved: {}", &fname, err);}
+            if VERBOSE_TEST {trace!("debug image {} not saved: {}", &fname, err);}
         }
     }
 
@@ -321,14 +322,14 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
 
     let (w, h) = image.dimensions();
     if w != sd.screen_width || h != sd.screen_height {
-        if VERBOSE_TEST { eprintln!("dimensions mismatch: {}x{} vs {}x{}", w, h, sd.screen_width, sd.screen_height); }
+        if VERBOSE_TEST { trace!("dimensions mismatch: {}x{} vs {}x{}", w, h, sd.screen_width, sd.screen_height); }
         return (None, None)
     }
     let x0 = (w - sd.title_width) / 2; // left boundary for searching
     let x1 = w / 2; // right boundary for searching
     // search for matching pattern: dark - light - dark. dark: (r+g+b) < 33 * 3
     let y = sd.rhombus_cy;
-    // eprintln!("find_rhombus_line y={}, x=[{}..{}]", y, x0, x1);
+    // trace!("find_rhombus_line y={}, x=[{}..{}]", y, x0, x1);
     let mut x_left = x0;
     let mut was_bright = false;
     for x in x0..x1 {
@@ -341,10 +342,10 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
              if was_bright {
                 let x_right = x - 1;
                 let x_len =  x_right - x_left + 1;
-                if VERBOSE_TEST {eprintln!("   check light spot x=[{}..{}], L={})", x_left, x_right, x_len);}
+                if VERBOSE_TEST {trace!("   check light spot x=[{}..{}], L={})", x_left, x_right, x_len);}
                 if abs_diff(sd.rhombus_size, x_len) < 4 {
                     // it seems we found light spot. and it is big enough but not so much
-                    if VERBOSE_TEST {eprintln!("   light spot x=[{}..{}], L={}) has good size", x_left, x_right, x_len);}
+                    if VERBOSE_TEST {trace!("   light spot x=[{}..{}], L={}) has good size", x_left, x_right, x_len);}
                     let cx = (x_left + x) / 2;
                     let cm = image.get_pixel(cx, y);
                     // check for solidity
@@ -355,15 +356,15 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
                     for i in 0 .. dd {
                         let c = image.get_pixel(x0 + i, y);
                         let d1 = rgba_diff(cm, c);
-                        if VERBOSE_TEST {eprintln!("   [{}] ({};{}) rgba_diff({:?}, {:?}) = {}", i, x0 + i, y, cm, c, d1);}
+                        if VERBOSE_TEST {trace!("   [{}] ({};{}) rgba_diff({:?}, {:?}) = {}", i, x0 + i, y, cm, c, d1);}
                         s += d1
                     }
                     let d = s / dd;
-                    // eprintln!("   ... rgba_diff {}/{}={} vs {}", s, dd, d, DRIFT_THRESHOLD3);
+                    // trace!("   ... rgba_diff {}/{}={} vs {}", s, dd, d, DRIFT_THRESHOLD3);
                     if d < DRIFT_THRESHOLD3 { // solid enough
                         let (quality, diff) = best_quality_match(cm);
                         let (adj_x, adj_y) = adjust_center(image, sd, cx, y);
-                        // eprintln!("... line seems solid enough ({};{}),q={}, diff={}", adj_x, adj_y, quality.to_str(), diff);
+                        // trace!("... line seems solid enough ({};{}),q={}, diff={}", adj_x, adj_y, quality.to_str(), diff);
                         let lm = LineMatch{
                             cx: adj_x,
                             cy: adj_y,
@@ -371,26 +372,26 @@ fn find_rhombus_line(image: &DynamicImage, sd: &ScreenCoords, test: bool) -> (Op
                             quality: quality,
                             diff: diff,
                         };
-                        // eprintln!("... dig deeper: check for rhombus");
+                        // trace!("... dig deeper: check for rhombus");
                         let (ok, checkmap) = check_rhombus(image, sd, &lm, test);
                         if ok {
-                            // eprintln!("... rhombus check passed! return quality={}", lm.quality.to_str());
+                            // trace!("... rhombus check passed! return quality={}", lm.quality.to_str());
                             return (Some(lm), checkmap);
                         }
                     } else {
-                        if VERBOSE_TEST {eprintln!("... dirty");}
+                        if VERBOSE_TEST {trace!("... dirty");}
                     }
                 } else {
-                    if VERBOSE_TEST {eprintln!("... size mismatch");}
+                    if VERBOSE_TEST {trace!("... size mismatch");}
                 }
             } else {
-                // eprintln!("... in the darkness");
+                // trace!("... in the darkness");
             }
             x_left = x;
             was_bright = false;
         }
     }
-    if VERBOSE_TEST { eprintln!("found nothing"); }
+    if VERBOSE_TEST { trace!("found nothing"); }
     (None, None) // did not find anything valuable
 }
 
@@ -437,6 +438,7 @@ mod tests {
     use std::path::Path;
 
     use image::DynamicImage;
+    use log::{trace, warn};
     use crate::types::Quality;
     use crate::parser::{parse_rhombus_quality};
 
@@ -458,9 +460,9 @@ mod tests {
         if let Some(src) = report {
             let path = format!("{}/{}.png", REPORT_PATH, name);
             if let Err(err) = fs::create_dir_all(REPORT_PATH) {
-                println!("create_dir_all error {}", err);
+                warn!("create_dir_all error {}", err);
             } else if let Err(err) = src.save(&path) {
-                println!("save error {}", err);
+                warn!("save error {}", err);
             }
         }
     }
@@ -473,7 +475,7 @@ mod tests {
         let (reported_quality, report) = parse_rhombus_quality(&input, true);
         let report_name = format!("diamond_check_quality_for_px");
         save_report_png(&report, report_name.clone());
-        if VERBOSE_TEST {eprintln!("diamond_check_quality_for_px({}, {}) q={}", &path, quality.to_str(), reported_quality.to_str());}
+        if VERBOSE_TEST {trace!("diamond_check_quality_for_px({}, {}) q={}", &path, quality.to_str(), reported_quality.to_str());}
         reported_quality == quality
     }
 
@@ -497,7 +499,7 @@ mod tests {
             let (reported_quality, report) = parse_rhombus_quality(&input, true);
             let report_name = format!("batch_diamond_check.{}.{}", &test_name, &pic_name);
             save_report_png(&report, report_name);
-            if VERBOSE_TEST {eprintln!("batch_diamond_check({}, {}) pix={}, q={}", quality.to_str(), &outcome, &str_path, reported_quality.to_str());}
+            if VERBOSE_TEST {trace!("batch_diamond_check({}, {}) pix={}, q={}", quality.to_str(), &outcome, &str_path, reported_quality.to_str());}
             if (reported_quality == quality) != outcome { all_matched = false; }
         }
         all_matched

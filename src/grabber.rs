@@ -1,8 +1,9 @@
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
+use log::{info, trace, warn};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
@@ -16,11 +17,11 @@ use windows_capture::window::{Window, Error};
 use crossbeam_channel::{Sender, TrySendError};
 
 use crate::imagework::image_from_frame;
-use crate::types::{Meta, Screenshot};
+use crate::types::Screenshot;
+
+const COFFEE_BREAK_FOR_WATCHER: u64 = 1000;
 
 const WINDOW_TITLE: &'static str = "Last Oasis  ";
-const COFFEE_BREAK_FOR_WATCHER: u64 = 100;
-
 // get focused Last Oasis window 
 fn get_focused() -> Option<Window> {
     match Window::foreground() {
@@ -48,9 +49,7 @@ fn get_focused() -> Option<Window> {
 
 struct CaptureSettings {
     capture_item: Window,
-    stop_flag: Arc<AtomicBool>,
-    is_capturing: Arc<AtomicBool>,
-    frame_tx: Sender<Screenshot>,
+    comm: Arc<CommBlock>,
 }
 
 struct Capture {
@@ -77,23 +76,16 @@ impl GraphicsCaptureApiHandler for Capture {
         frame: &mut Frame,
         capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        eprintln!("on_frame_arrived begin");
+        trace!("[Capture] on_frame_arrived begin");
         // Construct and send the frame to processing queue
         let image = image_from_frame(frame)?;
-        let ss = Screenshot {
-            pit_captured: Instant::now(),
-            pit_received: None,
-            pit_parsed: None,
-            image: image,
-            meta: Meta::empty(),            
-        };
-
-        match self.settings.frame_tx.try_send(ss) {
+        let ss = Screenshot::new(image);
+        self.settings.comm.send_got_frame();
+        match self.settings.comm.frame_tx.try_send(ss) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => { eprintln!("frame dropped"); }
+            Err(TrySendError::Full(_)) => { warn!("[Capture] frame dropped"); }
             Err(TrySendError::Disconnected(_)) => {
-                eprintln!("disconnected. stop capture.");
-                self.settings.is_capturing.store(false, Ordering::Relaxed);
+                info!("[Capture] disconnected. stop capture.");
                 capture_control.stop();
                 return Ok(());
             }
@@ -101,143 +93,206 @@ impl GraphicsCaptureApiHandler for Capture {
         // if self.settings.frame_tx.send(Arc::new(cap)).is_err() { break; }
 
         // Check if the stop flag has been set (e.g., by Ctrl+C).
-        if self.settings.stop_flag.load(Ordering::Relaxed) {
-            eprintln!("on_frame_arrived got stop_flag");
-            self.settings.is_capturing.store(false, Ordering::Relaxed);
+        if self.settings.comm.recv_capture_stop() {
+            info!("[Capture] got stop_flag");
             // Signal the capture loop to stop.
             capture_control.stop();
+            info!("[Capture] return by stop_flag [1]");
             return Ok(());
         }
-        self.settings.is_capturing.store(true, Ordering::Relaxed);
+        trace!("[Capture] return for continue [2]");
         Ok(())
     }
 
     /// Optional handler for when the capture item (e.g., a window) is closed.
     fn on_closed(&mut self) -> Result<(), Self::Error> {
-        eprintln!("on_closed begin");
+        info!("[Capture] on_closed");
         // Stop the capture gracefully.
-        self.settings.stop_flag.store(true, Ordering::Relaxed);
-        eprintln!("on_closed end");
+        self.settings.comm.send_capture_stop();
         Ok(())
     }
 }
 
+
+// Communication Block for sharing among all the threads
+struct CommBlock  {
+    frame_tx: Sender<Screenshot>, // where to send captured frames (managed by Main)
+    watcher_started: AtomicBool, // true if Watcher process is running (managed by Watcher)
+    watcher_stop_flag: AtomicBool, // true if Watcher is need to stop running (managed by Main)
+    capture_started: AtomicBool, // true if Capture process is running (managed by Capture thread)
+    capture_active: AtomicBool, // true if Capture process is active (managed by Capture thread)
+    capture_got_frame: AtomicBool, // true if on_frame_arrived() called (managed by Capture callback & main)
+    capture_stop_flag: AtomicBool, // true if Watcher is need to stop running (managed by Watcher)
+}
+
+impl CommBlock {
+    pub fn new(frame_tx: Sender<Screenshot>) -> Self {
+        Self {
+            frame_tx: frame_tx,
+            watcher_started: AtomicBool::new(false),
+            watcher_stop_flag: AtomicBool::new(false),
+            capture_started: AtomicBool::new(false),
+            capture_active: AtomicBool::new(false),
+            capture_got_frame: AtomicBool::new(false),
+            capture_stop_flag: AtomicBool::new(false),
+        }
+    }
+
+    #[allow(unused)]
+    pub fn watcher_started_swap(&self, value: bool) -> bool {
+        self.watcher_started.swap(value, Ordering::Acquire)
+    }
+
+    #[allow(unused)]
+    pub fn watcher_is_started(&self) -> bool {
+        self.watcher_started.load(Ordering::Relaxed)
+    }
+
+    #[allow(unused)]
+    pub fn capture_started_swap(&self, value: bool) -> bool {
+        self.capture_started.swap(value, Ordering::Acquire)
+    }
+
+    #[allow(unused)]
+    pub fn capture_is_started(&self) -> bool {
+        self.capture_started.load(Ordering::Relaxed)
+    }
+
+    #[allow(unused)]
+    pub fn capture_is_active(&self) -> bool {
+        self.capture_active.load(Ordering::Relaxed)
+    }
+
+    #[allow(unused)]
+    pub fn send_got_frame(&self) {
+        self.capture_got_frame.swap(true, Ordering::Acquire);
+    }
+
+    #[allow(unused)]
+    pub fn recv_got_frame(&mut self) -> bool {
+        self.capture_got_frame.swap(false, Ordering::Acquire)
+    }
+
+    #[allow(unused)]
+    pub fn send_watcher_stop(&self) {
+        self.watcher_stop_flag.swap(true, Ordering::Acquire);
+    }
+
+    #[allow(unused)]
+    pub fn recv_watcher_stop(&self) -> bool {
+        self.capture_stop_flag.swap(false, Ordering::Acquire)
+    }
+
+    #[allow(unused)]
+    pub fn send_capture_stop(&self) {
+        self.capture_stop_flag.swap(true, Ordering::Acquire);
+    }
+
+    #[allow(unused)]
+    pub fn recv_capture_stop(&self) -> bool {
+        self.capture_stop_flag.swap(false, Ordering::Acquire)
+    }
+}
+
+
 pub struct Watcher {
-    frame_tx: Sender<Screenshot>, // where to send captured frames
-    running: Arc<AtomicBool>, // true if Watcher is already running
-    capturing_started: Arc<AtomicBool>, // true if Capture is active
-    is_capturing: Arc<AtomicBool>, // true if on_frame_arrived() called
-    stop_flag: Arc<AtomicBool>, // true if Watcher is need to stop running
+    comm: Arc<CommBlock>,
     thread_handle: Option<std::thread::JoinHandle<()>>, // my own thread
-    // below this line is the things for the thread
+    // below this line are the things for the thread
 }
 
 impl Watcher {
     pub fn new(frame_tx: Sender<Screenshot>) -> Self {
         Self {
-            frame_tx: frame_tx,
-            running: Arc::new(AtomicBool::new(false)),
-            capturing_started: Arc::new(AtomicBool::new(false)),
-            is_capturing: Arc::new(AtomicBool::new(false)),
-            stop_flag: Arc::new(AtomicBool::new(false)),
+            comm: Arc::new(CommBlock::new(frame_tx)),
             thread_handle: None,
         }
     }
-    
-    #[allow(unused)] 
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
-    }
 
-    pub fn is_capturing(&self) -> bool {
-        self.is_capturing.load(Ordering::Relaxed)
-    }
-
-    pub fn is_grabbing(&self) -> bool {
-        self.capturing_started.load(Ordering::Relaxed)
+    pub fn active(&self) -> bool {
+        self.comm.capture_is_started()
     }
 
     #[allow(unused)]
     pub fn stop(&mut self) {
-        if !self.is_running() {
+        if !self.comm.watcher_is_started() {
             return;
         }
-        self.stop_flag.store(true, Ordering::Relaxed); // tell the threaded process to stop
+        self.comm.send_watcher_stop(); // tell the threaded process to stop
         if let Some(handle) = self.thread_handle.take() {
             let _ = handle.join(); // should be not for long
             self.thread_handle = None;
-
         }
+        self.comm.watcher_started_swap(false);
     }
 
     pub fn start(&mut self) {
-        eprintln!("watcher.start() called");
-
-        if self.running.swap(true, Ordering::Acquire) {return;}
-
-        self.capturing_started.store(false, Ordering::Relaxed);
-        self.stop_flag.store(false, Ordering::Relaxed);
-
-        let frame_tx = self.frame_tx.clone();
-        let running = Arc::clone(&self.running);
-        let capturing_started = Arc::clone(&self.capturing_started);
-        let is_capturing = Arc::clone(&self.is_capturing);
-        let stop_flag = Arc::clone(&self.stop_flag);
-        
+        if self.comm.watcher_started_swap(true) {return;} // already started
+        info!("watcher.start() called");
+        let comm_clone = self.comm.clone();
         self.thread_handle = Some(thread::spawn(move || {
-            println!("[WATCHER] spawned");
-            let mut prev_window: Option<Window> = None;
-            let stop_grabbing: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-
-            while !stop_flag.load(Ordering::Relaxed) {
-                let new_window = get_focused();
-                if new_window != prev_window {
-                    // Let' assume we DON'T HAVE multiple LO windows,
-                    // so we're start recording when we got new active LO window 
-                    // AND the record is is not started                    
-                    if let Some(fg) = new_window {
-                        // stop previous grabbing if need
-                        if capturing_started.load(Ordering::Relaxed) {
-                            println!("capture process already exists");
-                        } else {
-                            // start new grabbing
-                            println!("[WATCHER] start capture process");
-                            let settings = CaptureSettings {
-                                capture_item: fg.clone(),
-                                stop_flag: stop_grabbing.clone(),
-                                is_capturing: is_capturing.clone(),
-                                frame_tx: frame_tx.clone(),
-                            };
-                            start_capture(settings).expect("start_capture error");
-                            capturing_started.store(true, Ordering::Relaxed);
-                        }
+            info!("[WATCHER] window watching thread spawned");
+            let mut prev_window = None;
+            let mut capture_thread_handle: Option<JoinHandle<()>> = None;
+            while !comm_clone.recv_watcher_stop() {
+                let window = get_focused();
+                if prev_window == window {
+                    // everything is the same... do nothing
+                    trace!("[WATCHER] nothing happened");
+                    thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_WATCHER));
+                    continue;
+                } else {
+                    trace!("[WATCHER] {:?} -> {:?}", &prev_window, &window);
+                    prev_window = window; // save for lather
+                    if let Some(w) = window {
+                        // start capture
+                        info!("[WATCHER] start capture");
+                        capture_thread_handle = start_capture_thread(comm_clone.clone(), w.clone());
                     } else {
-                        // stop grabbing if need
-                        if capturing_started.load(Ordering::Relaxed) {
-                            println!("[WATCHER] stop capture process");
-                            stop_grabbing.store(true, Ordering::Relaxed);
-                            capturing_started.store(false, Ordering::Relaxed);
+                        // stop capture
+                        info!("[WATCHER] stop capture");
+                        comm_clone.send_capture_stop();
+                        if let Some(h) = capture_thread_handle.take() {
+                            let _ = h.join(); // should be not for long. at least I hope so.
+                            capture_thread_handle = None;
                         }
+                        info!("[WATCHER] capture stopped");
                     }
-                    prev_window = new_window;
-                    println!("... capturing_started = {:?}", capturing_started.load(Ordering::Relaxed));
                 }
-                thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_WATCHER));
             }
-            println!("[WATCHER] loop finished");
-            if capturing_started.load(Ordering::Relaxed) {
-                stop_grabbing.store(true, Ordering::Relaxed);
-                capturing_started.store(false, Ordering::Relaxed);
-            }
-            running.store(false, Ordering::Relaxed); // I am not the king anymore
-            println!("[WATCHER] finished");
+            comm_clone.watcher_started_swap(false);
         }));
-    }   
+    }
+
+
 }
+
+fn start_capture_thread(comm: Arc<CommBlock>, window: Window) -> Option<JoinHandle<()>> {
+    info!("start_capture_thread(window={:?}) called", &window);
+    let window_clone = window.clone();
+    let comm_clone = comm.clone();
+    
+    let handle = Some(thread::spawn(move || {
+        info!("[CAPTURE] capture thread spawned");
+        let settings = CaptureSettings {
+            capture_item: window_clone,
+            comm: comm_clone.clone(),
+        };
+        info!("[CAPTURE] call start_capture ...");
+        comm.capture_started_swap(true);
+        match start_capture(settings) {
+            Ok(_) => { info!("start_capture returned normally"); }
+            Err(err) => { warn!("start_capture returned with error {}", err); }
+        }
+        comm.capture_started_swap(false);
+        info!("[CAPTURE] process finished");
+        info!("[CAPTURE] thread finished");
+    }));
+    return handle;
+}   
 
 /// Starts the capture process with the specified settings.
 fn start_capture(settings: CaptureSettings) -> Result<(), Error> {
-
     // Create the settings struct for the capture session.
     let capture_settings = Settings::new(
         settings.capture_item,
@@ -255,6 +310,10 @@ fn start_capture(settings: CaptureSettings) -> Result<(), Error> {
 
     // Start the capture and take control of the current thread.
     // Any errors from the capture handler will be propagated here.
-    Capture::start(capture_settings).expect("Screen capture failed");
+    match Capture::start(capture_settings) {
+        Ok(_) => { info!("Capture::start finished"); },
+        Err(err) => { warn!("Capture::start returned with error {}", err); }
+    }
     Ok(())
 }
+

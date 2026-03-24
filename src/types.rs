@@ -1,4 +1,5 @@
 use epaint::Color32;
+use log::trace;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use image::{DynamicImage};
@@ -126,16 +127,26 @@ pub struct Screenshot {
 }
 
 impl Screenshot {
+    pub fn new(image: DynamicImage) -> Self {
+         Self {
+            pit_captured: Instant::now(),
+            pit_received: None,
+            pit_parsed: None,
+            image: image,
+            meta: Meta::empty(),            
+        }
+    }
+
     pub fn set_received(&mut self) {
         let t = Instant::now();
-        println!("received in {:?}", t.duration_since(self.pit_captured));
+        trace!("received in {:?}", t.duration_since(self.pit_captured));
         self.pit_received = Some(t);
     }
 
     pub fn set_parsed(&mut self) {
         let t = Instant::now();
         if let Some(p) = self.pit_received {
-            println!("parsed in {:?}", t.duration_since(p));
+            trace!("parsed in {:?}", t.duration_since(p));
         }
         self.pit_parsed = Some(t);
     }

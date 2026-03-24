@@ -1,6 +1,7 @@
 use std::thread;
 
 use crossbeam_channel::{bounded, Sender, Receiver, TrySendError};
+use log::{trace, warn};
 
 use crate::types::{Meta, Screenshot};
 use crate::parser::parse;
@@ -24,13 +25,13 @@ fn worker(rx: Receiver<Screenshot>, tx: Sender<Screenshot>) {
         ss.meta = parse(&ss.image);
         ss.set_parsed();
         if !prev.same(&ss.meta) {
-            println!("It seems something happened: {:?}", &ss.meta);
+            trace!("It seems something happened: {:?}", &ss.meta);
             prev = ss.meta.clone();
             match tx.try_send(ss) {
                 Ok(()) => {},
-                Err(TrySendError::Full(_)) => {eprintln!("processed screenshot has been dropped");},
+                Err(TrySendError::Full(_)) => {warn!("processed screenshot has been dropped");},
                 Err(TrySendError::Disconnected(_)) => {
-                    eprintln!("worker disconnected");
+                    warn!("worker disconnected");
                     break;
                 },
             }
