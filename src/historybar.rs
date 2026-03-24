@@ -28,13 +28,13 @@ impl Widget for HistoryBar {
             egui::vec2(self.capacity as f32, ui.available_height()), 
             egui::Sense::empty()
         );
-        
+        let x0 = rect.min.x + rect.width() - (self.values.len() as f32);
         let painter = ui.painter();
         for (i, &color) in self.values.iter().enumerate() {
-            let x = rect.right() - i as f32;
+            let x = x0 + i as f32;
             let strip_rect = Rect::from_min_max(
-                Pos2::new(x - 1., rect.min.y),
-                Pos2::new(x, rect.max.y),
+                Pos2::new(x, rect.min.y),
+                Pos2::new(x + 1., rect.max.y),
             );
             painter.rect_filled(strip_rect, egui::CornerRadius::ZERO, color);
         }

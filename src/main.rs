@@ -2,10 +2,15 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{fs, thread};
+use std::{env, fs, thread};
 use std::time::{Duration};
 use serde::{Serialize, Deserialize};
 use log::{trace,info,warn};
+
+use fern::Dispatch;
+use log::LevelFilter;
+use chrono::Local;
+use std::fs::OpenOptions;
 
 use crossbeam_channel::{Select};
 
@@ -15,7 +20,6 @@ use eframe::egui::{
 use egui_twemoji::EmojiLabel;
 
 use rand::prelude::*;
-use chrono::prelude::*;
 
 mod types;
 mod grabber;
@@ -64,10 +68,45 @@ const SCREENSHOT_PATH: &'static str = "./screenshots/";
 const HISTORY_SIZE: usize = 100;
 
 //////////////////////////////////////////////////////////////////////////////
+
+fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
+    let time = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let fname = format!("logazer.{}.log", time);
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(fname)?;
+        
+    // RUST_LOG=trace|debug|info|warn|error
+    let level = env::var("RUST_LOG")
+        .ok()
+        .and_then(|v| v.parse::<LevelFilter>().ok())
+        .unwrap_or(LevelFilter::Info);
+
+    Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{} [{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                message
+            ))
+        })
+        .level(level)
+        .chain(std::io::stdout())
+        .chain(file)
+        .apply()?;
+
+    Ok(())
+}
+
+//////////////////////////////////////////////////////////////////////////////
 /// main
 //////////////////////////////////////////////////////////////////////////////
 
 fn main() -> eframe::Result {
+    init_logging().unwrap();
     info!("started");
     
     let options = eframe::NativeOptions {
@@ -171,7 +210,7 @@ fn fill_noise(canvas: &mut ColorImage) {
 fn paint(canvas: &mut ColorImage, ss: &Screenshot) {
     let resized = ss.image.resize_exact(canvas.width() as u32, canvas.height() as u32, image::imageops::FilterType::Triangle);
     let data = resized.to_rgba8();
-    eprintln!("canvas: {}x{}, shot {}x{}, resized: {}x{}",
+    trace!("canvas: {}x{}, shot {}x{}, resized: {}x{}",
               canvas.width(), canvas.height(),
               ss.image.width(), ss.image.height(),
               resized.width(), resized.height());
@@ -184,17 +223,18 @@ fn save(ss: &Screenshot) {
     let suffix = format!("{}", ss.meta.quality.to_str());
     let path = format!("{}/{}-{}.png", SCREENSHOT_PATH, time, suffix);
     if let Err(err) = fs::create_dir_all(SCREENSHOT_PATH) {
-        println!("create_dir_all error {}", err);
+        warn!("create_dir_all error {}", err);
         return;
     }
     if let Err(err) = ss.image.save(&path) {
-        println!("save error {}", err);
+        warn!("save error {}", err);
     }
-    println!("saved to {}", path);
+    info!("saved to {}", path);
 }
 
 impl LOGazer {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        info!("create GUI instance");
         // init_fonts(&cc.egui_ctx);
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let config: LOGazerConfig =  if let Some(storage) = cc.storage {
@@ -220,7 +260,7 @@ impl LOGazer {
         let history_bar_clone = Arc::clone(&history_bar);
         // start thread
         thread::spawn(move || {
-            eprintln!("screenshot receiver spawned");
+            info!("screenshot receiver spawned");
 
             let generate_noise = || {
                 fill_noise(&mut shot_clone.lock().unwrap());
@@ -230,8 +270,10 @@ impl LOGazer {
 
             let process_frame = |ss: Screenshot| {
                 let quality = ss.meta.quality;
-                if let Ok(mut bar) = history_bar_clone.lock() {
-                    bar.push(quality.to_color32());
+                if quality != Quality::Unknown {
+                    if let Ok(mut bar) = history_bar_clone.lock() {
+                        bar.push(quality.to_color32());
+                    }
                 }
                 let threshold = *quality_threshold_clone.lock().unwrap();
                 if quality >= threshold {
@@ -265,7 +307,7 @@ impl LOGazer {
                 process_frame(first);
                 for ss in rx { process_frame(ss); }
             }
-            eprintln!("screenshot receiver finished");
+            info!("screenshot receiver finished");
         });
 
         Self {
@@ -304,7 +346,7 @@ impl LOGazer {
                 ui.style_mut().interaction.selectable_labels = false;
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let active = self.watcher.active();
-                    // eprintln!("active: {}", active);
+                    // trace!("active: {}", active);
                     EmojiLabel::new(if active {ICON_WATCHING} else {ICON_SLEEPING}).show(ui);
                     ui.spacing();
                     ui.label(RichText::new(" [Last Oasis]: Gazer").color(if active {COLOR_WATCHING} else {COLOR_SLEEPING}));
@@ -380,5 +422,6 @@ impl eframe::App for LOGazer {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &self.config);
+        info!("GUI configuration saved")
     }    
 }
