@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use log::{info, trace, warn};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
@@ -75,16 +76,16 @@ impl GraphicsCaptureApiHandler for Capture {
         frame: &mut Frame,
         capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        eprintln!("[Capture] on_frame_arrived begin");
+        trace!("[Capture] on_frame_arrived begin");
         // Construct and send the frame to processing queue
         let image = image_from_frame(frame)?;
         let ss = Screenshot::new(image);
         self.settings.comm.send_got_frame();
         match self.settings.comm.frame_tx.try_send(ss) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => { eprintln!("[Capture] frame dropped"); }
+            Err(TrySendError::Full(_)) => { warn!("[Capture] frame dropped"); }
             Err(TrySendError::Disconnected(_)) => {
-                eprintln!("[Capture] disconnected. stop capture.");
+                info!("[Capture] disconnected. stop capture.");
                 capture_control.stop();
                 return Ok(());
             }
@@ -93,22 +94,21 @@ impl GraphicsCaptureApiHandler for Capture {
 
         // Check if the stop flag has been set (e.g., by Ctrl+C).
         if self.settings.comm.recv_capture_stop() {
-            eprintln!("[Capture] got stop_flag");
+            info!("[Capture] got stop_flag");
             // Signal the capture loop to stop.
             capture_control.stop();
-            eprintln!("[Capture] return[1]");
+            info!("[Capture] return by stop_flag [1]");
             return Ok(());
         }
-        eprintln!("[Capture] return[2]");
+        trace!("[Capture] return for continue [2]");
         Ok(())
     }
 
     /// Optional handler for when the capture item (e.g., a window) is closed.
     fn on_closed(&mut self) -> Result<(), Self::Error> {
-        eprintln!("[Capture] on_closed begin");
+        info!("[Capture] on_closed");
         // Stop the capture gracefully.
         self.settings.comm.send_capture_stop();
-        eprintln!("[Capture] on_closed end");
         Ok(())
     }
 }
@@ -228,35 +228,35 @@ impl Watcher {
 
     pub fn start(&mut self) {
         if self.comm.watcher_started_swap(true) {return;} // already started
-        eprintln!("watcher.start() called");
+        info!("watcher.start() called");
         let comm_clone = self.comm.clone();
         self.thread_handle = Some(thread::spawn(move || {
-            println!("[WATCHER] window watching thread spawned");
+            info!("[WATCHER] window watching thread spawned");
             let mut prev_window = None;
             let mut capture_thread_handle: Option<JoinHandle<()>> = None;
             while !comm_clone.recv_watcher_stop() {
                 let window = get_focused();
                 if prev_window == window {
                     // everything is the same... do nothing
-                    println!("[WATCHER] nothing happened");
+                    trace!("[WATCHER] nothing happened");
                     thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_WATCHER));
                     continue;
                 } else {
-                    println!("[WATCHER] {:?} -> {:?}", &prev_window, &window);
+                    trace!("[WATCHER] {:?} -> {:?}", &prev_window, &window);
                     prev_window = window; // save for lather
                     if let Some(w) = window {
                         // start capture
-                        println!("[WATCHER] start capture");
+                        info!("[WATCHER] start capture");
                         capture_thread_handle = start_capture_thread(comm_clone.clone(), w.clone());
                     } else {
                         // stop capture
-                        println!("[WATCHER] stop capture");
+                        info!("[WATCHER] stop capture");
                         comm_clone.send_capture_stop();
                         if let Some(h) = capture_thread_handle.take() {
                             let _ = h.join(); // should be not for long. at least I hope so.
                             capture_thread_handle = None;
                         }
-                        println!("[WATCHER] capture stopped");
+                        info!("[WATCHER] capture stopped");
                     }
                 }
             }
@@ -268,22 +268,25 @@ impl Watcher {
 }
 
 fn start_capture_thread(comm: Arc<CommBlock>, window: Window) -> Option<JoinHandle<()>> {
-    eprintln!("start_capture_thread(window={:?}) called", &window);
+    info!("start_capture_thread(window={:?}) called", &window);
     let window_clone = window.clone();
     let comm_clone = comm.clone();
     
     let handle = Some(thread::spawn(move || {
-        println!("[CAPTURE] capture thread spawned");
+        info!("[CAPTURE] capture thread spawned");
         let settings = CaptureSettings {
             capture_item: window_clone,
             comm: comm_clone.clone(),
         };
-        println!("[CAPTURE] call start_capture ...");
+        info!("[CAPTURE] call start_capture ...");
         comm.capture_started_swap(true);
-        start_capture(settings).expect("[WATCHER] start_capture error");
+        match start_capture(settings) {
+            Ok(_) => { info!("start_capture returned normally"); }
+            Err(err) => { warn!("start_capture returned with error {}", err); }
+        }
         comm.capture_started_swap(false);
-        println!("[CAPTURE] process finished");
-        println!("[CAPTURE] thread finished");
+        info!("[CAPTURE] process finished");
+        info!("[CAPTURE] thread finished");
     }));
     return handle;
 }   
@@ -307,7 +310,10 @@ fn start_capture(settings: CaptureSettings) -> Result<(), Error> {
 
     // Start the capture and take control of the current thread.
     // Any errors from the capture handler will be propagated here.
-    Capture::start(capture_settings).expect("Screen capture failed");
+    match Capture::start(capture_settings) {
+        Ok(_) => { info!("Capture::start finished"); },
+        Err(err) => { warn!("Capture::start returned with error {}", err); }
+    }
     Ok(())
 }
 

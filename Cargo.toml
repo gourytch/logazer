@@ -18,6 +18,7 @@ egui-twemoji = "0.8.0"
 egui_extras = { version = "0.33.3", features = ["svg"] }
 env_logger = "0.11.9"
 epaint = "0.33.3"
+fern = "0.7.1"
 image = "0.25.10"
 log = "0.4.29"
 rand = "0.10.0"
