@@ -579,5 +579,54 @@ mod tests {
         assert!(batch_diamond_check(Quality::Legendary, false));
     }
 
+
+    pub fn get_quality(path: &String) -> Option<Quality> {
+        let file_name = Path::new(path)
+            .file_name()?          // "1920x1080-Common-Stone.png"
+            .to_str()?;            // &str
+
+        let stem = Path::new(file_name)
+            .file_stem()?          // "1920x1080-Common-Stone"
+            .to_str()?;
+
+        let mut parts = stem.splitn(3, '-');
+        let _resolution = parts.next()?;
+        let quality_str = parts.next()?;
+        Quality::from_str(quality_str)
+    }
+
+    #[test]
+    // 
+    // file names in format:
+    // resolution-quality-something.png
+    // resolution : 1920x1080 etc.
+    // quality    : Unknown|Common|Uncommon|Rare|Epic|Legendary
+    // something  : any text (will be skipped)
+    #[allow(unused)]
+    fn test_resolutions() {
+        const VERBOSE_TEST: bool = false;
+        let test_pathname = "./assets/test/batch_resolution_check/";
+        let test_dir = Path::new(&test_pathname);
+        let mut all_matched = true;
+        for entry in fs::read_dir(test_dir).unwrap() {
+            let path = entry.unwrap().path();
+            let str_path = path.display().to_string();
+            let pic_name = path.file_stem()
+                .and_then(|os_str| os_str.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let expected_quality = get_quality(&pic_name).unwrap();
+            let input = load_image(str_path.clone());
+            let (reported_quality, report) = parse_rhombus_quality(&input, true);
+            let report_name = format!("batch_resolution_check.{}", &pic_name);
+            save_report_png(&report, report_name);
+            if VERBOSE_TEST {trace!("batch_resolution_check for {}, want {}, got {}", &pic_name, expected_quality, reported_quality); }
+            if (reported_quality != expected_quality) { all_matched = false; }
+        }
+        assert!(all_matched);
+    }
+
+
 }
 
+    

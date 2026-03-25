@@ -1,7 +1,7 @@
 use epaint::Color32;
 use log::trace;
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::{fmt, time::Instant};
 use image::{DynamicImage};
 
 pub const NO_COORD: u32 = 9999999;
@@ -56,6 +56,19 @@ pub enum Quality {
 }
 
 impl Quality {
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Unknown" => Some(Quality::Unknown),
+            "Common" => Some(Quality::Common),
+            "Uncommon" => Some(Quality::Uncommon),
+            "Rare" => Some(Quality::Rare),
+            "Epic" => Some(Quality::Epic),
+            "Legendary" => Some(Quality::Legendary),
+            _ => None,
+        }
+    }
+    
     pub fn to_str(self) -> &'static str {
         match self {
             Quality::Unknown => "Unknown",
@@ -79,8 +92,12 @@ impl Quality {
             // _ => "Unhandled",
         }
     }
+}
 
-
+impl fmt::Display for Quality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_str())
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
