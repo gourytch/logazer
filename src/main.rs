@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{env, fs, thread};
 use std::time::{Duration};
+use egui::{Context, Ui};
 use serde::{Serialize, Deserialize};
-use log::{trace,info,warn};
+use log::{debug, info, trace, warn};
 
 use fern::Dispatch;
 use log::LevelFilter;
@@ -15,7 +16,12 @@ use std::fs::OpenOptions;
 use crossbeam_channel::{Select};
 
 use eframe::egui::{
-    self, Align, Button, Color32, ColorImage, Image, Layout, RichText, TextureHandle, TextureOptions, TopBottomPanel, Visuals
+    self, Align, Button, Color32,    
+    ColorImage, Image, Layout,
+    RichText,
+    TextureHandle, TextureOptions,
+    TopBottomPanel, Visuals, Sense,
+    ViewportCommand, WindowLevel
 };
 use egui_twemoji::EmojiLabel;
 
@@ -59,6 +65,8 @@ const WINDOW_HEIGHT: f32 = GAP + HEADER_HEIGHT + GAP + PREVIEWER_HEIGHT + GAP;
 
 const ICON_SLEEPING: &'static str = "💤";
 const ICON_WATCHING: &'static str = "👀";
+const ICON_PINNED: &'static str = "📍";
+const ICON_UNPINNED: &'static str = "📌";
 const ICON_CLOSE: &'static str = "❌";
 
 const COLOR_SLEEPING: Color32 = Color32::from_rgb(128,128,255);
@@ -101,6 +109,31 @@ fn init_logging() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+
+
+////
+
+fn emoji_button(ui: &mut Ui, emoji: &str,clicked: impl FnOnce()) {
+    if false {
+        let resp = ui.add_sized(
+            ui.spacing().interact_size,
+            |ui: &mut egui::Ui| {
+                EmojiLabel::new(emoji).show(ui)
+            },
+        );
+        if resp.interact(Sense::click()).clicked() {
+            clicked();
+        }
+    } else {
+        let button = ui.add(Button::new(
+            egui::RichText::new(emoji).size(16.0),
+        ));
+        if button.clicked() {
+            clicked();
+        }
+    }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 /// main
 //////////////////////////////////////////////////////////////////////////////
@@ -139,6 +172,7 @@ fn main() -> eframe::Result {
 #[derive(Serialize, Deserialize)]
 pub struct LOGazerConfig {
     pub quality_threshold: Quality,
+    pub pinned: bool,
 }
 
 
@@ -146,6 +180,7 @@ impl Default for LOGazerConfig {
     fn default() -> Self {
         Self {
             quality_threshold: Quality::Rare,
+            pinned: false,
         }
     }
 }
@@ -346,18 +381,28 @@ impl LOGazer {
                 ui.style_mut().interaction.selectable_labels = false;
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let active = self.watcher.active();
-                    // trace!("active: {}", active);
                     EmojiLabel::new(if active {ICON_WATCHING} else {ICON_SLEEPING}).show(ui);
                     ui.spacing();
                     ui.label(RichText::new(" [Last Oasis]: Gazer").color(if active {COLOR_WATCHING} else {COLOR_SLEEPING}));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.horizontal(|ui| {
+                        emoji_button(ui, ICON_CLOSE, || {
+                            debug!("BUTTON CLICKED: CLOSE");
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        });
+                        emoji_button(ui,if self.config.pinned {ICON_PINNED} else {ICON_UNPINNED}, || {
+                            debug!("BUTTON CLICKED: PIN");
+                            self.config.pinned = !self.config.pinned;
+                            let level = if self.config.pinned {
+                                WindowLevel::AlwaysOnTop
+                            } else {
+                                WindowLevel::Normal
+                            };
+                            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
+                        });
+                    });
                     // ui.colored_label(qvalue.to_color32(), qvalue.to_str());
-
-                    let close_btn = ui.add(Button::new(ICON_CLOSE));
-                    if close_btn.clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
                     let mut quality = *self.quality_threshold.lock().unwrap();
                     egui::ComboBox::from_id_salt("quality_threshold")
                             .selected_text(RichText::new(quality.to_str()).color(quality.to_color32()))
