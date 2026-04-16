@@ -2,7 +2,7 @@ use epaint::Color32;
 use log::trace;
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Instant};
-use image::{DynamicImage};
+use image::{DynamicImage, GenericImageView};
 
 pub const NO_COORD: u32 = 9999999;
 
@@ -21,14 +21,53 @@ pub enum ViewType {
     Auger,
 }
 
+pub enum EntityGroup {
+    Unknown,
+    Resources,
+    Buildings,
+    Containers,
+    Bosses,
+    Mobs,
+    Apes,
+}
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 #[allow(unused)]
 pub enum Entity {
     Unknown,
-    Bush,
-    Wood,
-    Stone,
+    /* resources */
+    Bush, Corn, Poppy, Aloe, Cattail, Cotton, BloodTurnip, BurntBush, VolcanicPlant,
+    Pebble, Rock, Sulfur, Obsidian,
+    Cactus, CactusTree, Palm, Tree, Driftwood, 
+    Bones, RedwoodTree, BurntTree, Mushroom,
+    Vine,
+    IronOre, GlowingOre, ClayDeposit,
+    /* Buildings */
+    AncientFabricator,
+    /* Containers */
+    AmmoBox,
+    Urn,
+    LootStash,
+    Warehouse,
+    LargeCase,
+    /* Bosses */
+    Lazaward,
+    ToxicWarPapak,
+    WarOkkam,
+    Koa,
+    Gogo,
+    /* Mobs */
+    Nurr,
+    Phemke,
+    /* Apes */
+    RupuAshdweller,
+    RupuPlainstrider,
+    RupuHarraser,
+    RupuSeeker,
+    RupuScuttler,
+    RupuFirebrand,
+    RupuDrudge,
+    RupuHazraki,
 }
 
 impl Entity {
@@ -36,8 +75,8 @@ impl Entity {
         match self {
             Entity::Unknown => "Unknown",
             Entity::Bush => "Bush",
-            Entity::Wood => "Wood",
-            Entity::Stone => "Stone",
+            Entity::Driftwood => "Driftwood",
+            Entity::Rock => "Rock",
             #[allow(unused)]
             _ => "Unhandled",
         }
@@ -168,3 +207,80 @@ impl Screenshot {
         self.pit_parsed = Some(t);
     }
 }
+
+
+//////////////////////////////////////////////////////////////////////////////
+/// ScreenCoords
+//////////////////////////////////////////////////////////////////////////////
+
+#[derive(Clone, Copy)]
+pub struct ScreenCoords {
+    pub screen_width: u32,
+    pub screen_height: u32,
+    pub title_top: u32,
+    pub title_bottom: u32,
+    pub title_width: u32,
+    pub coords_top: u32,
+    pub coords_bottom: u32,
+    pub coords_right: u32,
+    pub coords_left: u32,
+    pub rhombus_cy: u32,
+    pub rhombus_size: u32,
+}
+
+pub const SD_BASE: ScreenCoords = ScreenCoords {
+    screen_width: 2560,
+    screen_height: 1440,
+    title_top: 40, // (Ycoord) from the top to the white line on the title (~approx)
+    title_bottom: 152, // (Ycoord) from the top to the line below that is definitely not a title
+    title_width: 600, // (Xcoord) maximum width for the title
+    coords_top: 53,   // (Ycoord) from the top to the coords block
+    coords_bottom: 74,  // (Ycoord) from the top the bottom line of the coords block
+    coords_right: 2280, // (Xcoord) right boundary of the coords block
+    coords_left: 1840,  // (Xcoord) left boundary of the coords block
+    rhombus_cy: 69,     // (Ycoord) y-coord of quality rhombus
+    rhombus_size: 25, // (Xcoord) diagonal size for the quality rhombus (+-2 px)
+};
+
+impl ScreenCoords {
+    pub fn scaled(width: u32, height: u32) -> Self {
+        macro_rules! scaled_w {
+            ($field:ident) => {
+                SD_BASE.$field * width / SD_BASE.screen_width
+            };
+        }
+        macro_rules! scaled_h {
+            ($field:ident) => {
+                SD_BASE.$field * height / SD_BASE.screen_height
+            };
+        }
+
+        Self {
+            screen_width: width,
+            screen_height: height,
+            title_top: scaled_h!(title_top),
+            title_bottom: scaled_h!(title_bottom),
+            title_width: scaled_w!(title_width),
+            coords_top: scaled_h!(coords_top),
+            coords_bottom: scaled_h!(coords_bottom),
+            coords_right: scaled_w!(coords_right),
+            coords_left: scaled_w!(coords_left),
+            rhombus_cy: scaled_h!(rhombus_cy),
+            rhombus_size: scaled_w!(rhombus_size),
+        }
+    }
+
+
+pub fn get_for_image(image: &DynamicImage) -> ScreenCoords {
+    let (width, height) = image.dimensions();    
+    if width == SD_BASE.screen_width && height == SD_BASE.screen_height {
+        SD_BASE
+    } else {
+        ScreenCoords::scaled(width, height)
+    }
+}
+
+
+}
+
+

@@ -22,7 +22,9 @@ use crate::types::Screenshot;
 const COFFEE_BREAK_FOR_WATCHER: u64 = 1000;
 
 const WINDOW_TITLE: &'static str = "Last Oasis  ";
+
 // get focused Last Oasis window 
+#[allow(unused)]
 fn get_focused() -> Option<Window> {
     match Window::foreground() {
         Err(_) => {
@@ -41,6 +43,19 @@ fn get_focused() -> Option<Window> {
                     }
                 }
             }
+        }
+    }
+}
+
+
+#[allow(unused)]
+fn get_by_title() -> Option<Window> {
+    match Window::from_name(WINDOW_TITLE) {
+        Err(_) => {
+            return None;
+        }
+        Ok(wnd) => {
+            return Some(wnd);
         }
     }
 }
@@ -175,17 +190,17 @@ impl CommBlock {
 
     #[allow(unused)]
     pub fn send_watcher_stop(&self) {
-        self.watcher_stop_flag.swap(true, Ordering::Acquire);
+        self.watcher_stop_flag.store(true, Ordering::Relaxed); // swap(true, Ordering::Acquire);
     }
 
     #[allow(unused)]
     pub fn recv_watcher_stop(&self) -> bool {
-        self.capture_stop_flag.swap(false, Ordering::Acquire)
+        self.watcher_stop_flag.swap(false, Ordering::Acquire)
     }
 
     #[allow(unused)]
     pub fn send_capture_stop(&self) {
-        self.capture_stop_flag.swap(true, Ordering::Acquire);
+        self.capture_stop_flag.store(true, Ordering::Relaxed); // swap(true, Ordering::Acquire);
     }
 
     #[allow(unused)]
@@ -216,18 +231,24 @@ impl Watcher {
     #[allow(unused)]
     pub fn stop(&mut self) {
         if !self.comm.watcher_is_started() {
+            info!("[WATCHER::stop] watcher is not started, quit");
             return;
         }
+        info!("[WATCHER::stop] send the STOP signal");
         self.comm.send_watcher_stop(); // tell the threaded process to stop
         if let Some(handle) = self.thread_handle.take() {
+            info!("[WATCHER::stop] join to the thread");
             let _ = handle.join(); // should be not for long
             self.thread_handle = None;
+            info!("[WATCHER::stop] ... joined");
+        } else {
+            info!("[WATCHER::stop] No handle - no awaiting");
         }
         self.comm.watcher_started_swap(false);
     }
 
     pub fn start(&mut self) {
-        if self.comm.watcher_started_swap(true) {return;} // already started
+        if self.comm.watcher_started_swap(true) {return;} // return if already started or set the started flag
         info!("watcher.start() called");
         let comm_clone = self.comm.clone();
         self.thread_handle = Some(thread::spawn(move || {
@@ -235,18 +256,20 @@ impl Watcher {
             let mut prev_window = None;
             let mut capture_thread_handle: Option<JoinHandle<()>> = None;
             while !comm_clone.recv_watcher_stop() {
-                let window = get_focused();
+                // let window = get_focused();
+                let window = get_by_title();
                 if prev_window == window {
                     // everything is the same... do nothing
                     trace!("[WATCHER] nothing happened");
                     thread::sleep(Duration::from_millis(COFFEE_BREAK_FOR_WATCHER));
                     continue;
                 } else {
-                    trace!("[WATCHER] {:?} -> {:?}", &prev_window, &window);
+                    info!("[WATCHER] window has been changed {:?} -> {:?}", &prev_window, &window);
                     prev_window = window; // save for lather
                     if let Some(w) = window {
                         // start capture
-                        info!("[WATCHER] start capture");
+                        info!("[WATCHER] start capture for {:?}", &window);
+                        comm_clone.recv_capture_stop(); // reset the capture flag if it is set
                         capture_thread_handle = start_capture_thread(comm_clone.clone(), w.clone());
                     } else {
                         // stop capture
@@ -261,6 +284,7 @@ impl Watcher {
                 }
             }
             comm_clone.watcher_started_swap(false);
+            info!("[WATCHER] window watching thread finished");
         }));
     }
 
@@ -280,19 +304,18 @@ fn start_capture_thread(comm: Arc<CommBlock>, window: Window) -> Option<JoinHand
         };
         info!("[CAPTURE] call start_capture ...");
         comm.capture_started_swap(true);
-        match start_capture(settings) {
+        match do_capture_session(settings) {
             Ok(_) => { info!("start_capture returned normally"); }
             Err(err) => { warn!("start_capture returned with error {}", err); }
         }
         comm.capture_started_swap(false);
-        info!("[CAPTURE] process finished");
         info!("[CAPTURE] thread finished");
     }));
     return handle;
 }   
 
 /// Starts the capture process with the specified settings.
-fn start_capture(settings: CaptureSettings) -> Result<(), Error> {
+fn do_capture_session(settings: CaptureSettings) -> Result<(), Error> {
     // Create the settings struct for the capture session.
     let capture_settings = Settings::new(
         settings.capture_item,
